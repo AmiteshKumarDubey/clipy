@@ -5,6 +5,11 @@ Clipy** button above the prompt in Claude Code. Press it, show Claude what you
 mean while you talk it through, press **Stop and send**, and Claude reads the
 recording and gets to work.
 
+<a href="https://clipy.online/video/jq4rktjwisp4"><img src="https://raw.githubusercontent.com/clipy-recorder/clipy/main/.github/assets/claude-setup-video.jpg" alt="Play the 90-second film: set up Clipy for Claude Code in one line, then show Claude your screen with /record or the Record with Clipy button"></a>
+
+[Watch the 90-second setup film](https://clipy.online/video/jq4rktjwisp4): one command
+sets up Clipy for Claude Code, then `/record` or the Record button does the rest.
+
 No prompt to write, no screenshots to paste. Claude gets what you said, when
 you said it, what you clicked and a screenshot of each moment that matters.
 

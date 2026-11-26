@@ -6,6 +6,11 @@ PC, you talk
 through what you want while you click around, you say **stop**, and Claude
 reads the recording and gets to work.
 
+<a href="https://clipy.online/video/jq4rktjwisp4"><img src="https://raw.githubusercontent.com/clipy-recorder/clipy/main/.github/assets/claude-setup-video.jpg" alt="Play the 90-second film: set up Clipy for Claude Code in one line, then show Claude your screen with /record or the Record with Clipy button"></a>
+
+[Watch the 90-second setup film](https://clipy.online/video/jq4rktjwisp4): one command
+sets up Clipy for Claude Code, then `/record` or the Record button does the rest.
+
 ```text
 /plugin marketplace add clipy-recorder/clipy
 /plugin install record@clipy

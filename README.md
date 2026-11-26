@@ -148,6 +148,12 @@ Rather click than type? `/plugin install clipy-record@clipy` puts a
 Claude, press Stop and send. Details in
 [plugins/clipy-record](plugins/clipy-record/README.md).
 
+<a href="https://clipy.online/video/jq4rktjwisp4"><img src=".github/assets/claude-setup-video.jpg" alt="Play the 90-second film: set up Clipy for Claude Code in one line, then show Claude your screen with /record or the Record with Clipy button"></a>
+
+`npx @clipy/cli@latest setup claude` installs all three plugins in one step.
+[Watch the 90-second setup film](https://clipy.online/video/jq4rktjwisp4), or give your
+agent the [agent-readable version](https://clipy.online/video/jq4rktjwisp4.arec).
+
 For Codex, Cursor and other agents, install the same workflow as a skill:
 
 ```bash
