@@ -72,6 +72,9 @@ longer (up to 29 minutes).
   recorded area go to Clipy to pick the key moments. With Clipy Local, nothing leaves your Mac.
 - The normal Clipy recording indicator is visible the whole time, and only
   programs running as you on your Mac can ask Clipy to record.
+- What the plugin downloads, and from where: when the Clipy CLI is not
+  installed, `npx -y @clipy/cli@0.21.0` fetches that exact version from the
+  npm registry. Nothing else is downloaded by the plugin.
 
 ## More
 

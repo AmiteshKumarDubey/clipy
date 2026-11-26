@@ -93,6 +93,9 @@ validator is MIT. Read it at [arecformat.org](https://arecformat.org).
 - With Clipy Local, nothing leaves your computer unless you add a model
   provider yourself.
 - The normal Clipy recording indicator is visible the whole time.
+- What the plugin downloads, and from where: when the Clipy CLI is not
+  installed, `npx -y @clipy/cli@0.21.0` fetches that exact version from the
+  npm registry. Nothing else is downloaded by the plugin.
 
 ## Open source
 

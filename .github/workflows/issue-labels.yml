@@ -39,6 +39,16 @@ jobs:
           ensure "app: android"         "1d76db" "Clipy for Android"
           ensure "app: web"             "1d76db" "The web app at clipy.online"
           ensure "app: desktop"         "1d76db" "The desktop app from clipy.online/download"
+          ensure "good first issue"     "7057ff" "A small, well-scoped first contribution"
+          ensure "help wanted"          "008672" "Larger work we would love help with"
+          ensure "hiring-cohort"        "c5def5" "Suitable for a hiring batch; open to everyone"
+          ensure "platform: Linux"      "bfdadc" "Linux"
+          ensure "platform: Windows"    "bfdadc" "Windows"
+          ensure "platform: macOS"      "bfdadc" "macOS"
+          ensure "area: desktop"        "c2e0c6" "The desktop app in desktop/"
+          ensure "area: packages"       "c2e0c6" "The TypeScript packages in packages/"
+          ensure "area: plugins"        "c2e0c6" "The Claude Code plugins and skills in plugins/"
+          ensure "area: docs"           "c2e0c6" "READMEs, guides and examples"
 
       - name: Add the product label
         if: github.event_name == 'issues'

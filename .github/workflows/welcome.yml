@@ -1,0 +1,36 @@
+# Thanks a first-time contributor on their first pull request and tells them
+# what happens next. Uses pull_request_target only to get a token that can
+# comment on pull requests from forks: it checks out no code, runs nothing
+# from the pull request, and the comment text is fixed.
+name: Welcome
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  welcome:
+    name: Welcome a first-time contributor
+    if: >-
+      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+      github.event.pull_request.author_association == 'FIRST_TIMER'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Comment
+        run: |
+          gh pr comment "$NUMBER" --body "Thanks for your first pull request to Clipy!
+
+          What happens next:
+          - A maintainer replies within a working day.
+          - CI runs the package tests on Linux, the desktop tests on macOS and a compile check on Windows. If something fails and you are not sure why, ask here.
+          - Once it is merged, you are credited in the release notes.
+
+          While you wait, come say hi or show what your agent watched in Discussions: https://github.com/${GH_REPO}/discussions"

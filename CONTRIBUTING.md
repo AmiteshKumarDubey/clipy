@@ -16,8 +16,39 @@ file on your own machine, and the Clipy desktop app built from them.
 - Suggest a feature for any Clipy app or for the code here with the feature
   template, starting from the problem you want solved.
 - Improve the docs. Small fixes are welcome without an issue.
+- Share what your agent watched or recorded in
+  [Discussions](https://github.com/clipy-recorder/clipy/discussions) (Show
+  and tell). Real uses tell us what to build next.
 
 Security problems go through [SECURITY.md](SECURITY.md), not public issues.
+
+## Your first contribution in about 15 minutes
+
+1. Fork the repository and clone your fork.
+2. `pnpm install --frozen-lockfile && pnpm test` (Node.js 20.19 or newer).
+   The package suites run on macOS, Windows and Linux.
+3. Pick an issue labelled
+   [`good first issue`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+   and comment "I'd like to take this". If nobody else has claimed it, it is
+   yours; a maintainer confirms in the thread.
+4. Make the change on a branch, run the tests again, and open a pull request
+   that says what changed and how you tested it.
+
+No issue that fits? Docs fixes, clearer error messages, more tests and new
+examples in `plugins/` are always welcome without one.
+
+## What to expect from us
+
+- A first response on every issue and pull request within a working day.
+- A claimed issue stays yours for seven days. If you need longer, say so in
+  the thread; if it goes quiet, we ask before opening it up again.
+- Review comments say what would make the change mergeable, not just what is
+  wrong.
+- Every merged pull request is credited by name in the release notes, and
+  shows on the contributors graph in the README.
+- Questions are welcome in the issue thread or in
+  [Discussions](https://github.com/clipy-recorder/clipy/discussions); answers
+  there help the next person too.
 
 ## Layout
 
@@ -27,6 +58,7 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 | `packages/config` | Provider and transcription settings | TypeScript, Vitest |
 | `packages/capture` | Screen capture with ffmpeg | TypeScript, Vitest |
 | `packages/transcribe` | Speech to timestamped segments | TypeScript, Vitest |
+| `plugins/` | Claude Code plugins and skills: `/watch`, `/record` and the Record with Clipy button | Markdown skills, TypeScript |
 | `desktop/` | The Clipy desktop app | Tauri 2 (Rust) and React |
 
 The packages form one pnpm workspace at the root. `desktop/` is its own pnpm

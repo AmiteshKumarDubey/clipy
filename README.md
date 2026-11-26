@@ -5,26 +5,28 @@
 <h1 align="center">Clipy</h1>
 
 <p align="center">
-	The AI-native screen recorder. Record your screen and talk; the people you share it with and your AI agents both get it.
+	The open-source, AI-native screen recorder. Let your AI agents watch any video and see your screen.
 </p>
 
 <p align="center">
+	<a href="#give-your-ai-agent-eyes-in-30-seconds">Quick start</a>
+	 |
+	<a href="https://clipy.online/docs/clipy-local">Clipy Local docs</a>
+	 |
+	<a href="https://arecformat.org/spec">AREC format</a>
+	 |
+	<a href="https://github.com/clipy-recorder/clipy/discussions">Discussions</a>
+	 |
+	<a href="CONTRIBUTING.md">Contribute</a>
+	 |
 	<a href="https://clipy.online">Website</a>
-	 |
-	<a href="https://clipy.online/download">Download</a>
-	 |
-	<a href="https://clipy.online/docs">Docs</a>
-	 |
-	<a href="https://clipy.online/pricing">Pricing</a>
-	 |
-	<a href="https://chromewebstore.google.com/detail/clipy-screen-recorder-for/kpoeghpnpjdaglohmnemgkljahinendl">Chrome extension</a>
-	 |
-	<a href="https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml">Feedback</a>
 </p>
 
 <p align="center">
 	<a href="https://www.npmjs.com/package/@clipy/cli"><img src="https://img.shields.io/npm/v/@clipy/cli?label=%40clipy%2Fcli" alt="npm"></a>
 	<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+	<a href="https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22"><img src="https://img.shields.io/github/issues/clipy-recorder/clipy/good%20first%20issue?label=good%20first%20issues&color=7057ff" alt="Good first issues"></a>
+	<a href="https://github.com/clipy-recorder/clipy/discussions"><img src="https://img.shields.io/github/discussions/clipy-recorder/clipy?label=discussions" alt="Discussions"></a>
 </p>
 
 <p align="center">
@@ -36,6 +38,86 @@
 	 |
 	<a href="https://www.facebook.com/people/Clipy/61571411081419/">Facebook</a>
 </p>
+
+## Give your AI agent eyes in 30 seconds
+
+In Claude Code:
+
+```text
+/plugin marketplace add clipy-recorder/clipy
+/plugin install watch@clipy
+```
+
+Then hand it any video and ask:
+
+```text
+/watch https://www.youtube.com/watch?v=<id> what are the setup steps?
+/watch https://www.loom.com/share/<id> list every bug the speaker points out
+/watch ./demo.mov summarize this
+```
+
+No account and no login. YouTube captions and Loom transcripts are fetched on
+your machine, and a video file is transcribed on your machine. Claude answers
+with the timestamps behind each claim, so you can check them in seconds.
+Details in [plugins/watch](plugins/watch/README.md).
+
+### Show Claude your screen
+
+```text
+/plugin install clipy-record@clipy   # a Record with Clipy button above the prompt
+/plugin install record@clipy         # the /record command
+```
+
+Press **Record with Clipy**, show Claude the bug, the design or the flow while
+you talk it through, then press **Stop and send**. Claude gets what you said,
+what you clicked and a screenshot of each moment that matters, and gets to
+work. No prompt to write, no screenshots to paste.
+
+The button records through **Clipy Local**, the desktop app in this
+repository ([build it](#build-the-desktop-app), no account needed), or
+through the [Clipy app](https://clipy.online/download) for Mac and Windows,
+where `npx @clipy/cli@latest setup claude` sets everything up in one line.
+Details in [plugins/clipy-record](plugins/clipy-record/README.md) and
+[plugins/record](plugins/record/README.md).
+
+<a href="https://clipy.online/video/jq4rktjwisp4"><img src=".github/assets/claude-setup-video.jpg" alt="Play the 90-second film: set up Clipy for Claude Code, then show Claude your screen with /record or the Record with Clipy button"></a>
+
+### Codex, Cursor and any other agent
+
+```bash
+npm i -g @clipy/cli
+clipy agents install codex        # or: cursor, claude
+clipy context import "https://www.youtube.com/watch?v=<id>"
+```
+
+The last line writes a folder with `recording.arec`. Hand that file to any
+agent that reads files, or attach it in ChatGPT, Claude or Gemini.
+
+## How it works
+
+```text
+ video file, YouTube or Loom link, or your screen
+        |
+        v
+ transcript      on your machine: Apple speech on macOS, Parakeet or Whisper
+        |        elsewhere, or YouTube and Loom captions
+        v
+ key moments     rules on your machine: highlights, drawings, clicks, pointer
+        |        rests; add a model (Ollama, LM Studio or your own key) for
+        |        spoken cues like "this button" or "it breaks here"
+        v
+ frames          one screenshot per moment, extracted with ffmpeg
+        |
+        v
+ recording.arec  plain Markdown your agent reads: transcript, moments,
+                 screenshots and timestamps
+```
+
+[AREC](https://arecformat.org/spec) is an open format, version 1.4, with a
+public-domain (CC0) spec and an MIT validator, so any tool can write it and
+any agent can read it.
+
+## What Clipy is
 
 <img src=".github/assets/bug-recording.png" alt="Clipy recording a checkout bug in Chrome, with the camera bubble and drawing tools">
 
@@ -97,7 +179,7 @@ agent the [agent-readable version](https://clipy.online/video/f8lshuommnk5.arec)
 
 The full product docs live at [clipy.online/docs](https://clipy.online/docs).
 
-## Get started
+## Record with the Clipy app
 
 1. Download Clipy from [clipy.online/download](https://clipy.online/download)
    or add the [Chrome extension](https://chromewebstore.google.com/detail/clipy-screen-recorder-for/kpoeghpnpjdaglohmnemgkljahinendl).
@@ -123,43 +205,6 @@ the iPhone and Android apps, the web app and the desktop app work for you.
 
 We read every report. Reports we reproduce get the `confirmed` label, and we
 credit the person who sent it when the change ships.
-
-## Let your AI agent watch any video
-
-This repository is also a Claude Code plugin marketplace. In Claude Code:
-
-```text
-/plugin marketplace add clipy-recorder/clipy
-/plugin install watch@clipy
-```
-
-Then `/watch <YouTube URL | Loom link | video file> [question]`, for example
-`/watch https://www.youtube.com/watch?v=<id> what are the main steps?`. Claude
-turns the video into an AREC on your machine and answers with timestamps.
-Details in [plugins/watch](plugins/watch/README.md).
-
-To show Claude your screen instead, add `/plugin install record@clipy` and run
-`/record` on your Mac or Windows PC. Clipy Local (or the Clipy app) records while you talk it
-through, you say stop, and Claude reads the AREC and gets to work. Details in
-[plugins/record](plugins/record/README.md).
-
-Rather click than type? `/plugin install clipy-record@clipy` puts a
-**Record with Clipy** button above the prompt in every session: press it, show
-Claude, press Stop and send. Details in
-[plugins/clipy-record](plugins/clipy-record/README.md).
-
-<a href="https://clipy.online/video/jq4rktjwisp4"><img src=".github/assets/claude-setup-video.jpg" alt="Play the 90-second film: set up Clipy for Claude Code in one line, then show Claude your screen with /record or the Record with Clipy button"></a>
-
-`npx @clipy/cli@latest setup claude` installs all three plugins in one step.
-[Watch the 90-second setup film](https://clipy.online/video/jq4rktjwisp4), or give your
-agent the [agent-readable version](https://clipy.online/video/jq4rktjwisp4.arec).
-
-For Codex, Cursor and other agents, install the same workflow as a skill:
-
-```bash
-npm i -g @clipy/cli
-clipy agents install codex     # or: cursor, claude
-```
 
 ## Self-hosting
 
@@ -271,16 +316,33 @@ running on your machine with Ollama or LM Studio.
 
 ## Contribute
 
-Build, test and pull request steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
-Issues labelled `good first issue` are a good place to start. Feedback on
-one of the apps rather than the code here? Use the
-[app report form](https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml). Report security
-problems privately, as [SECURITY.md](SECURITY.md) describes.
+Clipy grows with the people who use it. Every issue and pull request gets a
+first response within a working day. [CONTRIBUTING.md](CONTRIBUTING.md) gets you
+from clone to a passing test run in about five minutes.
 
 ```bash
 pnpm install
 pnpm test
 ```
+
+Where help makes the biggest difference right now:
+
+| Area | Good for | Start here |
+|---|---|---|
+| Clipy Local on Linux (Tauri, Rust, ffmpeg x11grab) | Rust and desktop developers | [`platform: Linux`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22platform%3A+Linux%22) |
+| The agent bridge on Windows (named pipes) | Rust developers on Windows | [`platform: Windows`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22platform%3A+Windows%22) |
+| Moment rules: what deserves a screenshot | TypeScript, video and UX tinkerers | [`area: packages`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+packages%22) |
+| Claude Code plugins and skills | Anyone who uses an AI agent daily | [`area: plugins`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+plugins%22) |
+| Docs, examples and translations | First-time contributors | [`good first issue`](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) |
+
+Every merged pull request is credited in the release notes. Show what your
+agent watched, or ask anything, in
+[Discussions](https://github.com/clipy-recorder/clipy/discussions). Feedback
+on one of the apps rather than the code here? Use the
+[app report form](https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml).
+Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+
+<a href="https://github.com/clipy-recorder/clipy/graphs/contributors"><img src="https://contrib.rocks/image?repo=clipy-recorder/clipy" alt="Contributors to clipy-recorder/clipy"></a>
 
 ## License
 
