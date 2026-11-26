@@ -95,6 +95,19 @@ test('record, watch the timer, stop and hand the AREC to Claude', async ($, on) 
   }
 })
 
+test('the desktop draws the Clipy mark beside the button; the terminal keeps the dot', async ($, on) => {
+  host(on, { version: '0.20.0' })
+  const desktop = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(JSON.stringify(await desktop.findAll({}))).toContain('"type":"Svg"')
+  expect((await desktop.find({ key: 'record' }))?.text).toBe('Record with Clipy')
+  await desktop.unmount()
+
+  const terminal = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(JSON.stringify(await terminal.findAll({}))).not.toContain('"type":"Svg"')
+  expect((await terminal.find({ key: 'record' }))?.text).toBe('● Record with Clipy')
+  await terminal.unmount()
+})
+
 test('cancel throws the take away and says nothing to Claude', async ($, on) => {
   const { calls, prompts } = host(on, { version: '0.20.0' })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })

@@ -5,6 +5,9 @@ import type { RecordState } from '../types'
 
 type $ = EngineInterface
 
+/** The Clipy mark, drawn next to the Record button where the surface can draw SVG. */
+const CLIPY_MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" aria-label="Clipy"><defs><linearGradient id="clipyRecordMarkGrad" x1="20" y1="18" x2="45" y2="49" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FF6A3D"/><stop offset="0.55" stop-color="#FF4D29"/><stop offset="1" stop-color="#FF2778"/></linearGradient></defs><g transform="translate(32 31.5) rotate(-18) scale(1.38) translate(-16.5 -20)"><path d="M6 4 L6 32 L13 25 L18 36 L22 34.5 L18 23 L27 23 Z" fill="url(#clipyRecordMarkGrad)"/></g><circle cx="48.3" cy="48.3" r="4.5" fill="#FF4D29"/></svg>'
+
 const IDLE: RecordState = { phase: 'idle', startedAt: null, arec: null, error: null, hint: null }
 const recording = atom({ plugin: 'clipy-record', key: 'state' } as const, IDLE)
 const elapsed = atom({ plugin: 'clipy-record', key: 'elapsed' } as const, 0)
@@ -376,7 +379,10 @@ export const register: Register = (on, options) => {
     const state = await read($, recording)
     // A take in progress always shows, hidden or not.
     if (state.phase === 'idle' && !state.error && (await read($, hidden))) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    // The desktop app, VS Code and mobile draw SVG; the terminal keeps the dot.
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
 
     if (state.phase === 'recording') {
       if (!stopWatching) watch($, options)
@@ -417,7 +423,14 @@ export const register: Register = (on, options) => {
             <Text dimColor>Show Claude your screen instead of typing it out</Text>
           )}
           <Box>
-            <Button key="record" hotkey="r" label="● Record with Clipy" onPress={() => start($, options)} />
+            {Svg ? <Svg key="mark" source={CLIPY_MARK} alt="Clipy" width={18} height={18} /> : null}
+            {Svg ? <Text> </Text> : null}
+            <Button
+              key="record"
+              hotkey="r"
+              label={Svg ? 'Record with Clipy' : '● Record with Clipy'}
+              onPress={() => start($, options)}
+            />
             <Text> </Text>
             <Button key="hide" hotkey="h" label="Hide" dimColor onPress={() => setHidden($, true)} />
           </Box>
