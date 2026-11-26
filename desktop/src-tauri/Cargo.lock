@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "clipy-desktop"
-version = "1.1.84"
+version = "1.1.85"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

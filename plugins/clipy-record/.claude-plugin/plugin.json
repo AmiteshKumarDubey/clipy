@@ -1,0 +1,51 @@
+{
+  "name": "clipy-record",
+  "displayName": "Record with Clipy",
+  "version": "0.3.0",
+  "description": "A Record button above the prompt: show Claude your screen and talk it through, press stop, and Claude reads the recording (transcript, key moments, screenshots) and gets to work.",
+  "author": {
+    "name": "Clipy",
+    "url": "https://clipy.online"
+  },
+  "homepage": "https://github.com/clipy-recorder/clipy/tree/main/plugins/clipy-record",
+  "repository": "https://github.com/clipy-recorder/clipy",
+  "license": "Apache-2.0",
+  "keywords": [
+    "screen-recording",
+    "record",
+    "screen-recorder",
+    "video",
+    "transcript",
+    "arec",
+    "clipy"
+  ],
+  "icon": "./.claude-plugin/icon.png",
+  "privacyPolicyUrl": "https://clipy.online/privacy",
+  "termsOfServiceUrl": "https://clipy.online/terms",
+  "supportUrl": "https://clipy.online/support",
+  "documentationUrl": "https://github.com/clipy-recorder/clipy/tree/main/plugins/clipy-record#readme",
+  "engines": {
+    "claude-code": ">=2.1.328"
+  },
+  "network": {
+    "hosts": [
+      "clipy.online",
+      "registry.npmjs.org"
+    ]
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "clipyCommand": {
+      "type": "string",
+      "title": "Clipy command",
+      "description": "How to run the Clipy CLI. Leave empty to use clipy from your PATH, or give a full command such as node /path/to/cli/dist/index.js.",
+      "default": ""
+    },
+    "maxMinutes": {
+      "type": "number",
+      "title": "Longest recording (minutes)",
+      "description": "The recording stops by itself after this long, up to 29 minutes.",
+      "default": 10
+    }
+  }
+}

@@ -143,6 +143,11 @@ To show Claude your screen instead, add `/plugin install record@clipy` and run
 through, you say stop, and Claude reads the AREC and gets to work. Details in
 [plugins/record](plugins/record/README.md).
 
+Rather click than type? `/plugin install clipy-record@clipy` puts a
+**Record with Clipy** button above the prompt in every session: press it, show
+Claude, press Stop and send. Details in
+[plugins/clipy-record](plugins/clipy-record/README.md).
+
 For Codex, Cursor and other agents, install the same workflow as a skill:
 
 ```bash
@@ -242,6 +247,7 @@ take an agent starts asks for your consent in the app.
 | `packages/transcribe` | Turns speech into timestamped segments: downloadable on-device models, or your own key for OpenAI, Groq, Deepgram, AssemblyAI, ElevenLabs or Gemini. |
 | `plugins/watch` | The Claude Code plugin that lets an agent watch any video. |
 | `plugins/record` | The Claude Code plugin that records your Mac or Windows screen so you can show an agent what you mean. |
+| `plugins/clipy-record` | The Record with Clipy button above the prompt in Claude Code. |
 
 ## Where your data goes
 

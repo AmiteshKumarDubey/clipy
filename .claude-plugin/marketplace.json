@@ -31,6 +31,20 @@
         "transcript",
         "arec"
       ]
+    },
+    {
+      "name": "clipy-record",
+      "source": "./plugins/clipy-record",
+      "description": "A Record button above the prompt. Show Claude your screen and talk it through, press stop, and Claude reads the recording and gets to work.",
+      "category": "productivity",
+      "tags": [
+        "screen-recording",
+        "record",
+        "screen-recorder",
+        "video",
+        "transcript",
+        "arec"
+      ]
     }
   ]
 }

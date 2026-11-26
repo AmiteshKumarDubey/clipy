@@ -1,0 +1,111 @@
+# Record with Clipy: a Record button inside Claude Code
+
+Some things are faster to show than to type. This plugin puts a **Record with
+Clipy** button above the prompt in Claude Code. Press it, show Claude what you
+mean while you talk it through, press **Stop and send**, and Claude reads the
+recording and gets to work.
+
+No prompt to write, no screenshots to paste. Claude gets what you said, when
+you said it, what you clicked and a screenshot of each moment that matters.
+
+## Install
+
+In Claude Code (2.1.328 or later):
+
+```text
+/plugin install clipy-record --marketplace clipy-recorder/clipy
+```
+
+Or add the marketplace first, which also gives you `/record` and `/watch`:
+
+```text
+/plugin marketplace add clipy-recorder/clipy
+/plugin install clipy-record@clipy
+```
+
+The button then sits above the prompt in every Claude Code session on your Mac
+or Windows PC: in the terminal, the desktop app and VS Code.
+
+## You also need Clipy on your computer
+
+Pick one:
+
+- **The Clipy app** for Mac or Windows:
+  [download it](https://clipy.online/download?utm_source=github&utm_medium=readme&utm_campaign=record-plugin)
+  and sign in once. Clipy is free to start: 7-day free trial, no card needed.
+- **Clipy Local**, the open-source edition in this repository: build it
+  yourself and record with no account at all.
+  [How to run Clipy Local](https://clipy.online/docs/clipy-local).
+
+And the Clipy CLI, which the button drives:
+
+```bash
+npm i -g @clipy/cli
+```
+
+It needs version 0.20.0 or later. Without it installed, the button runs it
+through `npx`.
+
+The first time, Clipy asks whether AI agents may start recordings. Allow it
+once and it remembers.
+
+## Using it
+
+- **● Record with Clipy** starts recording your screen and microphone. The
+  band shows a timer while it records.
+- **Stop and send** stops, and Clipy builds the recording on your computer.
+  It then reaches Claude as your next prompt.
+- **Cancel** throws the recording away. Claude never sees it.
+- Stopping from the Clipy app works too: the band notices and sends the
+  recording to Claude the same way.
+- **Hide** tucks the button away in every session. Run `/record-button` to
+  bring it back.
+- With the band focused (ctrl+x tab, or a click), `r` records, `s` stops and
+  sends, `c` cancels and `h` hides.
+
+Recordings stop by themselves after 10 minutes. Change that, or point the
+button at a CLI that is not on your PATH, in `/config` under Record with Clipy.
+
+## What Claude gets
+
+Every recording becomes an AREC file next to the video: the transcript with
+timestamps, the key moments (your clicks, highlights and what you said about
+them) and a screenshot of each. Claude reads that file and the screenshots,
+then does what you asked.
+
+AREC is the open format that makes a recording readable by AI agents, in plain
+Markdown. Version 1.4 is stable; the spec is public domain (CC0) and the
+validator is MIT. Read it at [arecformat.org](https://arecformat.org).
+
+## Privacy
+
+- The video and the screenshots stay on your computer. Nothing is uploaded
+  unless you upload it yourself.
+- With the Clipy app, the transcript text, the names of what you clicked, a
+  sample of your pointer and key activity and the size of the recorded area go
+  to Clipy to pick the key moments. On Windows the audio also goes to Clipy for
+  the transcript and is deleted once it is done.
+- With Clipy Local, nothing leaves your computer unless you add a model
+  provider yourself.
+- The normal Clipy recording indicator is visible the whole time.
+
+## Open source
+
+Apache-2.0, like the rest of this repository. The button is one file,
+[hooks/register.tsx](hooks/register.tsx), with its tests in
+[hooks/register.test.tsx](hooks/register.test.tsx). To try a change, clone the
+repository and run:
+
+```bash
+claude plugin test plugins/clipy-record
+claude --plugin-dir plugins/clipy-record
+```
+
+## More
+
+- Prefer typing? `/record` in the same marketplace does this from a command:
+  [plugins/record](../record/README.md).
+- Let Claude watch any video, a YouTube link, a Loom link or a file:
+  [plugins/watch](../watch/README.md).
+- Something not working? Run `clipy doctor`, or
+  [open an issue](https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml).
