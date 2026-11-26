@@ -7,10 +7,14 @@ file on your own machine, and the Clipy desktop app built from them.
 
 - Pick an issue labelled `good first issue` or `help wanted`. Comment on it
   first so two people do not build the same thing.
-- Report a bug with the bug template. A short screen recording of the problem
-  helps a lot.
-- Suggest a feature with the feature template, starting from the problem you
-  want solved.
+- Report a bug in the code here with the "Bug in the code here" template. A
+  short screen recording of the problem helps a lot.
+- Try the Chrome extension, the iPhone or Android app or the web app, and
+  report anything that does not work as you expected with the "Bug in a Clipy
+  app" template. Record it with Clipy and paste the share link; the Clipy team
+  reproduces it and replies in the issue.
+- Suggest a feature for any Clipy app or for the code here with the feature
+  template, starting from the problem you want solved.
 - Improve the docs. Small fixes are welcome without an issue.
 
 Security problems go through [SECURITY.md](SECURITY.md), not public issues.

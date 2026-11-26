@@ -1,11 +1,13 @@
-name: Bug report
-description: Something in the Clipy desktop app or the packages does not work as described.
+name: Bug in the code here
+description: Something in this repository (the desktop app built from source, the packages or the CLI with --local) does not work as described.
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
         Thanks for the report. Security problems go through SECURITY.md, not here.
+
+        Using the Chrome extension, the iPhone or Android app, the web app or the desktop app you downloaded? Use "Bug in a Clipy app" instead.
   - type: dropdown
     id: area
     attributes:

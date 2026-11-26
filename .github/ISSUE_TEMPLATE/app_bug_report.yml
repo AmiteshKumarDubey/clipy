@@ -1,0 +1,89 @@
+name: Bug in a Clipy app
+description: Something in the Chrome extension, the iPhone or Android app, the web app at clipy.online or the desktop app you downloaded did not work as you expected.
+title: "[App] "
+labels: ["app-bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Clipy and taking the time to report this. A clear report gets acted on fast, so:
+
+        - **Record it with Clipy** and paste the share link below. Talk through what you expected while you record. If you cannot record it with Clipy, use your phone's or computer's own screen recorder and link that instead.
+        - **Record with a test account** or a page with nothing private on it. Recordings can show emails, names and dashboards.
+        - **Search the [open issues](https://github.com/clipy-recorder/clipy/issues?q=is%3Aissue+label%3Aapp-bug) first.** If it is already there, add your recording to that issue instead of opening a new one.
+
+        Security problems go through [SECURITY.md](https://github.com/clipy-recorder/clipy/blob/main/SECURITY.md), never here. Questions about your account, plan or billing go to [clipy.online/support](https://clipy.online/support).
+
+        The Clipy team reproduces every app report and replies here.
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Chrome extension
+        - iPhone or iPad app
+        - Android app
+        - Web app (clipy.online)
+        - Desktop app from clipy.online/download
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: The extension's version is on its card in chrome://extensions. For the apps, look in the app's settings or on its store page. "Latest" is fine if you just installed it.
+      placeholder: The version number, or "latest"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Browser, device and OS
+      placeholder: Chrome 142 on macOS 15.5, iPhone 15 on iOS 26.1, Pixel 8 on Android 16
+    validations:
+      required: true
+  - type: input
+    id: recording
+    attributes:
+      label: Recording
+      description: A Clipy share link, or a link to another screen recording.
+      placeholder: https://clipy.online/...
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Steps someone else can follow on the same product to see the same thing.
+      placeholder: |
+        1. Open a new tab and click the Clipy icon
+        2. Choose Window, turn the camera on and start recording
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Sometimes
+        - It happened once
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I searched the open issues and this is not there yet.
+          required: true
+        - label: The recording and this report show no passwords, keys or anyone's private data.
+          required: true

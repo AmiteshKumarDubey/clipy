@@ -6,6 +6,6 @@ contact_links:
   - name: Security report
     url: https://github.com/clipy-recorder/clipy/security/advisories/new
     about: Report a security problem privately.
-  - name: Hosted Clipy and the official apps
+  - name: Your account, plan or billing
     url: https://clipy.online/support
-    about: Help with share links, accounts and the full Clipy app.
+    about: Help with signing in, your plan, billing or access to a share link. Bugs in the apps go in "Bug in a Clipy app" above.

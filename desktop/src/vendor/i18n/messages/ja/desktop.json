@@ -39,7 +39,9 @@
       "micSwitched": "マイクを {device} に切り替えました",
       "recoveryOne": "未完了の録画がこのコンピューターに保存されています。Clipy を開いてアップロードするか破棄してください。",
       "recoveryMany": "未完了の録画が {count} 件、このコンピューターに保存されています。Clipy を開いてアップロードするか破棄してください。",
-      "clipboardCopiedOnly": "コピーしました。Clipy が貼り付けられなかったので、{key} を押してください。"
+      "clipboardCopiedOnly": "コピーしました。Clipy が貼り付けられなかったので、{key} を押してください。",
+      "linkCopied": "動画リンクを作成し、クリップボードにコピーしました。",
+      "linkReady": "動画リンクの準備ができました。"
     },
     "windowTitles": {
       "whatsNew": "Clipy の新機能",

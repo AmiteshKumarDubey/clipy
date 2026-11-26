@@ -181,6 +181,10 @@ pub(crate) const AGENT_MARKS: &str = "agent-marks.json";
 /// The title and description an agent gave at start, written before Stop so
 /// every AREC of the take (Preparing included) carries them.
 pub(crate) const AGENT_DETAILS: &str = "agent-details.json";
+/// Present when an agent started the take through the bridge. The agent gets
+/// the AREC path from `stop`, so a finished take neither overwrites the
+/// user's clipboard nor opens the viewer window over what they are doing.
+pub(crate) const AGENT_TAKE: &str = "agent-take";
 /// Keeps a note apart from recognized speech in the transcript.
 const NARRATION_PREFIX: &str = "Narration: ";
 /// A note's transcript segment runs until the next note, at most this long.
@@ -525,6 +529,20 @@ fn copy_arec_path<R: Runtime>(app: &AppHandle<R>, dir: &Path) -> bool {
     }
 }
 
+/// Marks a take as started by an agent. Best effort for the caller: without
+/// the marker the take only behaves like one the user started.
+pub(crate) fn mark_agent_take(dir: &Path) -> Result<()> {
+    std::fs::write(dir.join(AGENT_TAKE), b"")?;
+    Ok(())
+}
+
+pub(crate) fn is_agent_take(dir: &Path) -> bool {
+    dir.join(AGENT_TAKE).exists()
+}
+
+/// The `ready` line of an agent's take, whose path went back to the agent.
+const AGENT_READY_MESSAGE: &str = "Local AREC is ready for the agent that recorded it";
+
 /// The `ready` line the panel and the menu bar read out. It names the
 /// clipboard only when the path is on it; the fallback names the folder,
 /// which is always true and still tells the user where to look.
@@ -832,8 +850,8 @@ pub(crate) fn read_status(dir: &Path) -> Option<Status> {
     serde_json::from_slice(&std::fs::read(dir.join("status.json")).ok()?).ok()
 }
 
-/// Absent for every take no agent marked, which is every take outside the
-/// local edition's agent bridge. An unreadable file costs the narration only.
+/// Absent for every take no agent marked through the bridge. An unreadable
+/// file costs the narration only.
 fn read_agent_marks(dir: &Path) -> Vec<NarrationNote> {
     let Ok(bytes) = std::fs::read(dir.join(AGENT_MARKS)) else {
         return Vec::new();
@@ -1026,10 +1044,14 @@ fn process<R: Runtime>(
         // Copy first so the announcement can report what actually happened,
         // and announce before the window opens so the viewer's first read of
         // status.json already says "ready".
-        let copied = copy_arec_path(app, dir);
-        write_status(app, dir, "ready", ready_message(copied), copied)?;
-        if crate::commands::open_local_arec_enabled(app) {
-            open_viewer(app, dir);
+        if is_agent_take(dir) {
+            write_status(app, dir, "ready", AGENT_READY_MESSAGE, false)?;
+        } else {
+            let copied = copy_arec_path(app, dir);
+            write_status(app, dir, "ready", ready_message(copied), copied)?;
+            if crate::commands::open_local_arec_enabled(app) {
+                open_viewer(app, dir);
+            }
         }
     }
     match selection {
@@ -2151,6 +2173,15 @@ mod tests {
     fn ready_claims_the_clipboard_only_when_the_copy_landed() {
         assert!(ready_message(true).contains("clipboard"));
         assert!(!ready_message(false).contains("clipboard"));
+        assert!(!AGENT_READY_MESSAGE.contains("clipboard"));
+    }
+
+    #[test]
+    fn only_a_marked_take_counts_as_an_agent_take() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_agent_take(dir.path()), "a take the user started");
+        mark_agent_take(dir.path()).unwrap();
+        assert!(is_agent_take(dir.path()));
     }
 
     #[test]

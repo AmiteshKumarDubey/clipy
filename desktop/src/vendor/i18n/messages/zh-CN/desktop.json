@@ -39,7 +39,9 @@
       "micSwitched": "麦克风已切换到 {device}",
       "recoveryOne": "这台电脑上仍保存着一段未完成的录制。打开 Clipy 即可上传或丢弃。",
       "recoveryMany": "这台电脑上仍保存着 {count} 段未完成的录制。打开 Clipy 即可上传或丢弃。",
-      "clipboardCopiedOnly": "已复制。Clipy 无法替你粘贴，请按 {key}。"
+      "clipboardCopiedOnly": "已复制。Clipy 无法替你粘贴，请按 {key}。",
+      "linkCopied": "视频链接已生成并复制到剪贴板。",
+      "linkReady": "你的视频链接已生成。"
     },
     "windowTitles": {
       "whatsNew": "Clipy 新功能",

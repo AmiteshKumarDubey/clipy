@@ -39,7 +39,9 @@
       "micSwitched": "Microphone switched to {device}",
       "recoveryOne": "An unfinished recording is still saved on this computer. Open Clipy to upload or discard it.",
       "recoveryMany": "{count} unfinished recordings are still saved on this computer. Open Clipy to upload or discard them.",
-      "clipboardCopiedOnly": "Copied. Clipy couldn't paste it for you, so press {key}."
+      "clipboardCopiedOnly": "Copied. Clipy couldn't paste it for you, so press {key}.",
+      "linkCopied": "Video link ready and copied to your clipboard.",
+      "linkReady": "Your video link is ready."
     },
     "windowTitles": {
       "whatsNew": "What's new in Clipy",

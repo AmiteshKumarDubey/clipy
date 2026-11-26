@@ -39,7 +39,9 @@
       "micSwitched": "Microfone trocado para {device}",
       "recoveryOne": "Uma gravação não finalizada ainda está salva neste computador. Abra o Clipy para enviá-la ou descartá-la.",
       "recoveryMany": "{count} gravações não finalizadas ainda estão salvas neste computador. Abra o Clipy para enviá-las ou descartá-las.",
-      "clipboardCopiedOnly": "Copiado. O Clipy não conseguiu colar para você, então pressione {key}."
+      "clipboardCopiedOnly": "Copiado. O Clipy não conseguiu colar para você, então pressione {key}.",
+      "linkCopied": "Link do vídeo pronto e copiado para a área de transferência.",
+      "linkReady": "O link do seu vídeo está pronto."
     },
     "windowTitles": {
       "whatsNew": "Novidades do Clipy",

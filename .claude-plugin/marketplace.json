@@ -1,6 +1,6 @@
 {
   "name": "clipy",
-  "description": "Clipy plugins for Claude Code. Let your AI agent watch any video: YouTube, Loom or a file on your machine.",
+  "description": "Clipy plugins for Claude Code. Show your AI agent your screen, or let it watch any video: YouTube, Loom or a file on your machine.",
   "owner": {
     "name": "Clipy",
     "url": "https://clipy.online"
@@ -11,7 +11,26 @@
       "source": "./plugins/watch",
       "description": "/watch a YouTube video, a Loom link or a local video file, then ask about it. Answers cite timestamps.",
       "category": "productivity",
-      "tags": ["video", "youtube", "loom", "transcript", "arec"]
+      "tags": [
+        "video",
+        "youtube",
+        "loom",
+        "transcript",
+        "arec"
+      ]
+    },
+    {
+      "name": "record",
+      "source": "./plugins/record",
+      "description": "/record your screen and talk Claude through it. Claude reads the recording (transcript, key moments, screenshots) and gets to work. Stays on your computer, Mac or Windows.",
+      "category": "productivity",
+      "tags": [
+        "screen-recording",
+        "record",
+        "video",
+        "transcript",
+        "arec"
+      ]
     }
   ]
 }

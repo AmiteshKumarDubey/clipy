@@ -1240,10 +1240,13 @@ impl RecordingController {
             }
             self.set_phase(app, RecordingPhase::Idle, None);
             result?;
-            use tauri_plugin_clipboard_manager::ClipboardExt;
-            let arec = metadata.file_path.with_file_name("recording.arec");
-            if let Err(err) = app.clipboard().write_text(arec.to_string_lossy().into_owned()) {
-                tracing::warn!("local AREC clipboard write failed: {err:#}");
+            // An agent's take goes back to the agent through `stop`.
+            if !crate::local::is_agent_take(dir) {
+                use tauri_plugin_clipboard_manager::ClipboardExt;
+                let arec = metadata.file_path.with_file_name("recording.arec");
+                if let Err(err) = app.clipboard().write_text(arec.to_string_lossy().into_owned()) {
+                    tracing::warn!("local AREC clipboard write failed: {err:#}");
+                }
             }
             return Ok(metadata);
         }
@@ -4098,9 +4101,14 @@ fn surface_share_link<R: Runtime>(app: &AppHandle<R>, share: &ShareLinkDto) {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     use tauri_plugin_shell::ShellExt;
 
-    if let Err(err) = app.clipboard().write_text(share.url.clone()) {
-        tracing::warn!("clipboard write failed: {err:#}");
-    }
+    let copied = match app.clipboard().write_text(share.url.clone()) {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!("clipboard write failed: {err:#}");
+            false
+        }
+    };
+    notify_share_link(app, copied);
 
     // The finished video opens in the browser. The share
     // window is only the fallback for a Mac where no browser could launch.
@@ -4111,6 +4119,30 @@ fn surface_share_link<R: Runtime>(app: &AppHandle<R>, share: &ShareLinkDto) {
         if let Some(window) = app.get_webview_window("share") {
             let _ = window.show();
         }
+    }
+}
+
+/// The copy itself is silent, so a native notification says the link exists
+/// and whether it is on the clipboard. It names the clipboard only when the
+/// write landed: claiming a copy that failed would send the user to paste
+/// whatever their clipboard held before. Best effort, like the other
+/// notifications: macOS may hold them until authorization is granted.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn notify_share_link<R: Runtime>(app: &AppHandle<R>, copied: bool) {
+    use tauri_plugin_notification::NotificationExt;
+    let body = crate::i18n::t(if copied {
+        "notifications.linkCopied"
+    } else {
+        "notifications.linkReady"
+    });
+    if let Err(err) = app
+        .notification()
+        .builder()
+        .title(crate::edition::APP_NAME)
+        .body(body)
+        .show()
+    {
+        tracing::warn!("share link notification failed: {err:#}");
     }
 }
 

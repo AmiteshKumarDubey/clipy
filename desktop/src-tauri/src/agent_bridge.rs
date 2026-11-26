@@ -29,12 +29,15 @@
 //! server turns into the transcript when the recording has no speech. The upload path
 //! consults `agent_complete_extras` for this.
 //!
-//! The local edition (Clipy Local, no `cloud` feature) runs the same bridge
-//! with no sign-in: `start` records a Local take, `stop` waits for the take to
-//! finish processing on this computer and returns its AREC path, and the marks
-//! go into the take folder as `agent-marks.json`, which local processing turns
-//! into narration. Its discovery file sits in `Clipy Local/`, so an agent can
-//! never mistake it for the official app (which uploads).
+//! Local takes: a `start` with `"local": true` records a Local take instead of
+//! uploading. `stop` waits for the take to finish processing on this computer
+//! and returns its AREC path, and the marks go into the take folder as
+//! `agent-marks.json`, which local processing turns into narration. The
+//! official app does this on request (`clipy … --local`); the local edition
+//! (Clipy Local, no `cloud` feature) has nowhere to upload to, so every take
+//! it records is a Local take, with no sign-in. Clipy Local's discovery file
+//! sits in `Clipy Local/`, so an agent can never mistake it for the official
+//! app.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -44,10 +47,12 @@ use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+#[cfg(any(unix, windows))]
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 #[cfg(unix)]
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 use crate::auth::AuthState;
 use crate::recording::RecordingController;
@@ -64,7 +69,14 @@ use crate::types::{AudioOptionsDto, CaptureSourceDto, RecordingMode, RecordingPh
 /// `area`). Agent starts record a window by itself on macOS, but an older app
 /// records the window's fixed screen area, covering windows included, so the
 /// CLI must not tell an agent the window is isolated unless the app says so.
-const PROTOCOL_VERSION: u32 = 3;
+///
+/// 4 (was 3): `start` accepts `"local": true`, and the official app then
+/// records a Local take (kept on this computer, `stop` returns the AREC path)
+/// instead of uploading. The discovery file says `localTakes: true`. An older
+/// official app ignores the field and uploads, so the CLI sends it only to an
+/// app that advertises local takes, and checks that `start` echoes
+/// `local: true` before it trusts the take to stay on this computer.
+const PROTOCOL_VERSION: u32 = 4;
 const DEFAULT_MAX_SEC: u64 = 600;
 const HARD_CAP_SEC: u64 = 1800;
 /// Max marks per session. MUST NOT exceed the server's narration cap
@@ -76,7 +88,7 @@ const HARD_CAP_SEC: u64 = 1800;
 const MAX_MARKS: usize = 200;
 /// Max characters per mark. Matches the server's `MAX_NOTE_CHARS = 1000`.
 const MAX_MARK_CHARS: usize = 1000;
-/// How long a local-edition `stop` waits for the take to finish processing
+/// How long a Local take's `stop` waits for the take to finish processing
 /// (transcript, moments, frames). Past it the result says so, and the AREC,
 /// already usable while Preparing, keeps updating in place.
 const LOCAL_PROCESSING_WAIT_SECS: u64 = 300;
@@ -87,12 +99,19 @@ const EDITION: &str = if crate::edition::CLOUD { "cloud" } else { "local" };
 /// The sibling of the app data dir that holds `agent-bridge.json`. Different
 /// per edition so the two apps never overwrite each other's discovery file.
 const DISCOVERY_DIR_NAME: &str = if crate::edition::CLOUD { "Clipy" } else { "Clipy Local" };
-/// Clipy Local has nowhere to upload to, so its agent takes are Local takes.
-const AGENT_RECORDING_MODE: RecordingMode = if crate::edition::CLOUD {
-    RecordingMode::Instant
-} else {
-    RecordingMode::Local
-};
+/// The app named in a Local take's messages.
+const APP_NAME: &str = if crate::edition::CLOUD { "Clipy" } else { "Clipy Local" };
+
+/// What an agent `start` records. The official app uploads (Instant) unless
+/// the agent asks for a Local take; Clipy Local has nowhere to upload to, so
+/// its agent takes are always Local takes.
+fn agent_mode(local_requested: bool) -> RecordingMode {
+    if local_requested || !crate::edition::CLOUD {
+        RecordingMode::Local
+    } else {
+        RecordingMode::Instant
+    }
+}
 
 const STOPPED_FROM_APP: &str =
     "the recording was stopped from the Clipy Local app, so this agent session is no longer active";
@@ -117,6 +136,7 @@ struct AgentSession {
     marks: Vec<Mark>,
     journal_path: PathBuf,
     audio: AudioOptionsDto,
+    mode: RecordingMode,
 }
 
 static SESSION: Mutex<Option<AgentSession>> = Mutex::new(None);
@@ -202,6 +222,10 @@ struct BridgeRequest {
     /// a caller can flip one without restating the others.
     #[serde(default)]
     audio: Option<BridgeAudioDto>,
+    /// Record a Local take: kept on this computer, `stop` returns its AREC.
+    /// Ignored by Clipy Local, whose takes are always Local.
+    #[serde(default)]
+    local: bool,
 }
 
 /// Wire shape:
@@ -275,6 +299,10 @@ struct BridgeDiscovery<'a> {
     #[serde(rename = "protocolVersion")]
     protocol_version: u32,
     edition: &'a str,
+    /// Whether `start` honours `"local": true`. Absent in files from apps
+    /// before protocol 4, whose official edition always uploads.
+    #[serde(rename = "localTakes")]
+    local_takes: bool,
 }
 
 /// `~/Library/Application Support/Clipy` (`Clipy Local` for the local
@@ -320,9 +348,9 @@ fn write_discovery_file(path: &Path, contents: &str) -> Result<()> {
 }
 
 /// Spawn the bridge listener. Non-fatal on failure: the app runs fine
-/// without agent control; we log and move on. Unix-only transport (the
-/// Windows build gets a no-op until a named-pipe transport lands).
-#[cfg(unix)]
+/// without agent control; we log and move on. The transport is a Unix domain
+/// socket on macOS and Linux and a named pipe on Windows.
+#[cfg(any(unix, windows))]
 pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(err) = run(app).await {
@@ -331,12 +359,12 @@ pub fn spawn(app: AppHandle) {
     });
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn spawn(_app: AppHandle) {
-    tracing::info!("agent bridge: unsupported on this platform (needs a Unix domain socket)");
+    tracing::info!("agent bridge: unsupported on this platform");
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn run(app: AppHandle) -> Result<()> {
     let data_dir = app
         .path()
@@ -344,46 +372,64 @@ async fn run(app: AppHandle) -> Result<()> {
         .context("resolve app data dir")?;
     std::fs::create_dir_all(&data_dir).context("create app data dir")?;
 
-    let socket_path = data_dir.join("agent-bridge.sock");
-    // Stale socket from a crashed previous instance blocks bind — remove it.
-    // (If another live instance holds it, bind() below fails and we disable
-    // the bridge for this instance rather than fighting over the socket.)
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path).context("bind agent-bridge.sock")?;
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-            .context("chmod agent-bridge.sock")?;
-    }
+    let (address, listener) = bind_socket(&data_dir)?;
+    #[cfg(windows)]
+    let (address, listener) = bind_pipe()?;
 
     let token = random_token();
-    // The discovery file lives at a FIXED, bundle-id-independent path —
-    // `~/Library/Application Support/Clipy/agent-bridge.json` — because that is
+    // The discovery file lives at a FIXED, bundle-id-independent path, the
+    // sibling `Clipy` folder of the app data dir (`~/Library/Application
+    // Support/Clipy` on macOS, `%APPDATA%\Clipy` on Windows), because that is
     // the contract @clipy/cli reads (macBridge.ts::bridgeFilePath). It must not
-    // follow app_data_dir: that is `…/online.clipy.desktop` for stable and
-    // `…/online.clipy.desktop.beta` for beta, and the CLI would find neither.
-    // The socket itself stays in app_data_dir; the file carries its path.
+    // follow app_data_dir: that differs between stable and beta, and the CLI
+    // would find neither. The file carries the socket path or pipe name.
     // Clipy Local writes `Clipy Local/agent-bridge.json`, which only
     // `clipy … --local` reads.
     let discovery_dir = discovery_dir_path(&data_dir);
     std::fs::create_dir_all(&discovery_dir).context("create bridge discovery dir")?;
     let discovery_path = discovery_dir.join("agent-bridge.json");
     let discovery = serde_json::to_string_pretty(&BridgeDiscovery {
-        socket_path: &socket_path.to_string_lossy(),
+        socket_path: &address,
         token: &token,
         pid: std::process::id(),
         app_version: env!("CARGO_PKG_VERSION"),
         protocol_version: PROTOCOL_VERSION,
         edition: EDITION,
+        local_takes: true,
     })?;
     write_discovery_file(&discovery_path, &discovery)?;
     tracing::info!(
-        "agent bridge listening on {} (discovery: {})",
-        socket_path.display(),
+        "agent bridge listening on {address} (discovery: {})",
         discovery_path.display()
     );
 
+    #[cfg(unix)]
+    return serve_socket(app, token, listener).await;
+    #[cfg(windows)]
+    return serve_pipe(app, token, address, listener).await;
+}
+
+/// The socket lives in the app data dir and is 0600, so only this user can
+/// connect.
+#[cfg(unix)]
+fn bind_socket(data_dir: &Path) -> Result<(String, UnixListener)> {
+    let socket_path = data_dir.join("agent-bridge.sock");
+    // Stale socket from a crashed previous instance blocks bind — remove it.
+    // (If another live instance holds it, bind() below fails and we disable
+    // the bridge for this instance rather than fighting over the socket.)
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).context("bind agent-bridge.sock")?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+            .context("chmod agent-bridge.sock")?;
+    }
+    Ok((socket_path.to_string_lossy().into_owned(), listener))
+}
+
+#[cfg(unix)]
+async fn serve_socket(app: AppHandle, token: String, listener: UnixListener) -> Result<()> {
     loop {
         let (stream, _addr) = match listener.accept().await {
             Ok(pair) => pair,
@@ -392,19 +438,74 @@ async fn run(app: AppHandle) -> Result<()> {
                 continue;
             }
         };
-        let app = app.clone();
-        let token = token.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(err) = handle_connection(app, token, stream).await {
-                tracing::debug!("agent bridge connection error: {err:#}");
-            }
-        });
+        spawn_connection(&app, &token, stream);
     }
 }
 
-#[cfg(unix)]
-async fn handle_connection(app: AppHandle, token: String, stream: UnixStream) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
+/// A random name per launch, so another program cannot guess it and create the
+/// pipe first; `first_pipe_instance` fails if one did anyway. Remote clients
+/// are refused. The default pipe security lets only this user, SYSTEM and
+/// administrators write, and every request still needs the token from the
+/// discovery file, which sits in this user's own `%APPDATA%`.
+#[cfg(windows)]
+fn bind_pipe() -> Result<(String, NamedPipeServer)> {
+    let name = pipe_name(EDITION, &random_token()[..16]);
+    let server = ServerOptions::new()
+        .first_pipe_instance(true)
+        .reject_remote_clients(true)
+        .create(&name)
+        .context("create agent bridge pipe")?;
+    Ok((name, server))
+}
+
+#[cfg(any(windows, test))]
+fn pipe_name(edition: &str, suffix: &str) -> String {
+    format!(r"\\.\pipe\clipy-agent-bridge-{edition}-{suffix}")
+}
+
+/// A named pipe serves one client per instance: hand the connected instance
+/// to its own task and open the next one before waiting again.
+#[cfg(windows)]
+async fn serve_pipe(
+    app: AppHandle,
+    token: String,
+    name: String,
+    mut server: NamedPipeServer,
+) -> Result<()> {
+    loop {
+        let connected = server.connect().await;
+        let next = ServerOptions::new()
+            .reject_remote_clients(true)
+            .create(&name)
+            .context("create the next agent bridge pipe instance")?;
+        let client = std::mem::replace(&mut server, next);
+        match connected {
+            Ok(()) => spawn_connection(&app, &token, client),
+            Err(err) => tracing::warn!("agent bridge pipe connect error: {err}"),
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn spawn_connection<S>(app: &AppHandle, token: &str, stream: S)
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    let app = app.clone();
+    let token = token.to_string();
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = handle_connection(app, token, stream).await {
+            tracing::debug!("agent bridge connection error: {err:#}");
+        }
+    });
+}
+
+#[cfg(any(unix, windows))]
+async fn handle_connection<S>(app: AppHandle, token: String, stream: S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite,
+{
+    let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half).take(64 * 1024); // request size cap
     let mut line = String::new();
     reader.read_line(&mut line).await.context("read request")?;
@@ -465,12 +566,14 @@ fn cmd_status(app: &AppHandle) -> String {
             "maxSec": s.max_sec,
             "marks": s.marks.len(),
             "audio": s.audio,
+            "local": s.mode == RecordingMode::Local,
         })
     });
     ok_json(serde_json::json!({
         "appVersion": env!("CARGO_PKG_VERSION"),
         "protocolVersion": PROTOCOL_VERSION,
         "edition": EDITION,
+        "localTakes": true,
         "phase": format!("{:?}", dto.phase),
         "signedIn": auth.bearer_token().is_some(),
         "agentSession": session_json,
@@ -491,22 +594,26 @@ async fn cmd_sources() -> String {
     }
 }
 
-/// Clipy Local has no account: Local takes start with an empty token, exactly
-/// as the start_recording command does for them.
-fn agent_bearer(_app: &AppHandle) -> Result<String, String> {
+/// Clipy Local has no account: its takes are Local takes.
+fn agent_bearer(_app: &AppHandle, _mode: RecordingMode) -> Result<String, String> {
     Ok(String::new())
 }
 
-/// The native checks a Local take runs before capture (screen and speech
-/// permissions), the same as the start_recording command.
-async fn agent_preflight(app: &AppHandle) -> Result<(), String> {
+/// The checks a Local take runs before capture, the same as the
+/// start_recording command: in the official app, sign-in and recording
+/// access; in both, screen and speech permissions. Uploading takes need none.
+async fn agent_preflight(app: &AppHandle, mode: RecordingMode) -> Result<(), String> {
+    if mode != RecordingMode::Local {
+        return Ok(());
+    }
     crate::local::preflight_new_recording(app)
         .await
         .map_err(|err| err_json("start_failed", &format!("{err:#}")))
 }
 
 async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
-    let bearer = match agent_bearer(app) {
+    let mode = agent_mode(req.local);
+    let bearer = match agent_bearer(app, mode) {
         Ok(token) => token,
         Err(err) => return err,
     };
@@ -549,7 +656,7 @@ async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
         .unwrap_or(DEFAULT_MAX_SEC)
         .clamp(1, HARD_CAP_SEC);
 
-    if let Err(err) = agent_preflight(app).await {
+    if let Err(err) = agent_preflight(app, mode).await {
         return err;
     }
 
@@ -557,9 +664,9 @@ async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
     // primary display). Audio comes from `agent_audio_options` — the
     // agent-specific default is mic OFF, system audio ON, which is NOT the
     // app's interactive default; see that function for why. No webcam,
-    // Instant mode (streams to the raw-upload pipeline + auto-shares; Local in
-    // Clipy Local), no countdown: the agent wants frames now, not a 3-2-1
-    // overlay.
+    // Instant mode (streams to the raw-upload pipeline + auto-shares) unless
+    // the agent asked for a Local take, no countdown: the agent wants frames
+    // now, not a 3-2-1 overlay.
     let audio = agent_audio_options(req.audio.as_ref());
     let recording_id = match rec
         .start(
@@ -570,7 +677,7 @@ async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
             None,
             None,
             None,
-            AGENT_RECORDING_MODE,
+            mode,
             0,
         )
         .await
@@ -613,6 +720,7 @@ async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
         marks,
         journal_path,
         audio: audio.clone(),
+        mode,
     });
     *LAST_RESULT.lock() = None;
     // Fresh session: clear any app-side-stop marker left by a previous one.
@@ -665,9 +773,15 @@ async fn cmd_start(app: &AppHandle, req: BridgeRequest) -> String {
     }
     // Where the take is being written, so an agent can read the Preparing
     // AREC even before `stop` returns.
-    if AGENT_RECORDING_MODE == RecordingMode::Local {
+    if mode == RecordingMode::Local {
+        // Always echoed for a Local take: the CLI aborts a start without it.
+        started["local"] = serde_json::Value::Bool(true);
         if let Ok(dir) = crate::local::directory(app, &recording_id_str) {
-            started["local"] = serde_json::Value::Bool(true);
+            // `stop` hands the AREC to the agent, so the finished take leaves
+            // the clipboard and the screen alone.
+            if let Err(err) = crate::local::mark_agent_take(&dir) {
+                tracing::warn!("agent take marker could not be written: {err:#}");
+            }
             started["arecPath"] = serde_json::json!(dir.join("recording.arec"));
             started["directory"] = serde_json::json!(dir);
         }
@@ -787,10 +901,26 @@ fn sorted_marks(marks: &[Mark]) -> Vec<Mark> {
     sorted
 }
 
-/// Clipy Local: stop the capture, hand the marks to local processing, and wait
-/// for the take to be processed into its AREC. Callers hold COMMAND_LOCK.
+/// Stop the active session: a Local take returns its AREC, an uploading take
+/// its share link. Callers hold COMMAND_LOCK.
 async fn finish_session(app: &AppHandle, auto_stopped: bool) -> Result<serde_json::Value> {
     let session = take_live_session(app)?;
+    if session.mode == RecordingMode::Local {
+        return finish_local_session(app, session, auto_stopped).await;
+    }
+    {
+        // agent_mode never starts anything else in Clipy Local.
+        Err(anyhow!("Clipy Local records local takes only"))
+    }
+}
+
+/// A Local take: stop the capture, hand the marks to local processing, and
+/// wait for the take to be processed into its AREC.
+async fn finish_local_session(
+    app: &AppHandle,
+    session: AgentSession,
+    auto_stopped: bool,
+) -> Result<serde_json::Value> {
     let rec = app.state::<RecordingController>();
     let dir = crate::local::directory(app, &session.recording_id)?;
 
@@ -853,7 +983,7 @@ fn local_take_settled(stage: &str) -> bool {
     matches!(stage, "ready" | "failed")
 }
 
-/// What a local-edition `stop` returns: where the take and its AREC are, and
+/// What a Local take's `stop` returns: where the take and its AREC are, and
 /// the processing stage it reached.
 fn local_stop_result(
     recording_id: &str,
@@ -867,7 +997,7 @@ fn local_stop_result(
     let stage = status.map_or("processing", |s| s.stage.as_str());
     let message = if timed_out {
         format!(
-            "Clipy Local is still processing this recording ({stage}). {} is usable now and is updated in place; read it again for the transcript and frames.",
+            "{APP_NAME} is still processing this recording ({stage}). {} is usable now and is updated in place; read it again for the transcript and frames.",
             arec.display()
         )
     } else {
@@ -1006,12 +1136,52 @@ mod tests {
             Path::new("/Users/me/Library/Application Support").join(expected)
         );
         assert_eq!(EDITION, if crate::edition::CLOUD { "cloud" } else { "local" });
-        let mode = if crate::edition::CLOUD {
+    }
+
+    #[test]
+    fn the_windows_pipe_name_is_per_edition_and_launch() {
+        assert_eq!(
+            pipe_name("cloud", "0123abcd"),
+            r"\\.\pipe\clipy-agent-bridge-cloud-0123abcd"
+        );
+        assert_ne!(pipe_name("cloud", "a"), pipe_name("local", "a"));
+    }
+
+    #[test]
+    fn a_local_request_records_a_local_take() {
+        assert_eq!(agent_mode(true), RecordingMode::Local);
+        let unasked = if crate::edition::CLOUD {
             RecordingMode::Instant
         } else {
             RecordingMode::Local
         };
-        assert_eq!(AGENT_RECORDING_MODE, mode);
+        assert_eq!(agent_mode(false), unasked, "only Clipy Local makes every take local");
+    }
+
+    #[test]
+    fn start_reads_the_local_flag_and_defaults_it_off() {
+        let req: BridgeRequest =
+            serde_json::from_str(r#"{"token":"t","cmd":"start","local":true}"#).expect("parses");
+        assert!(req.local);
+        let req: BridgeRequest =
+            serde_json::from_str(r#"{"token":"t","cmd":"start"}"#).expect("parses");
+        assert!(!req.local, "an older CLI's start must not become a local take");
+    }
+
+    #[test]
+    fn the_discovery_file_advertises_local_takes() {
+        let json = serde_json::to_value(BridgeDiscovery {
+            socket_path: "/tmp/s",
+            token: "t",
+            pid: 1,
+            app_version: "1",
+            protocol_version: PROTOCOL_VERSION,
+            edition: EDITION,
+            local_takes: true,
+        })
+        .expect("serializes");
+        assert_eq!(json["localTakes"], true);
+        assert!(PROTOCOL_VERSION >= 4);
     }
 
     fn local_status(stage: &str, message: &str, dir: &Path) -> crate::local::Status {
@@ -1059,6 +1229,7 @@ mod tests {
         assert_eq!(json["autoStopped"], true);
         let message = json["message"].as_str().unwrap();
         assert!(message.contains("recording.arec"), "{message}");
+        assert!(message.starts_with(APP_NAME), "{message}");
         assert!(!message.contains('\u{2014}'), "no em dash in human-facing text");
 
         let unknown = local_stop_result("rec-3", dir, None, true, false, 1);

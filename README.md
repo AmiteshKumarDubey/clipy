@@ -18,6 +18,8 @@
 	<a href="https://clipy.online/pricing">Pricing</a>
 	 |
 	<a href="https://chromewebstore.google.com/detail/clipy-screen-recorder-for/kpoeghpnpjdaglohmnemgkljahinendl">Chrome extension</a>
+	 |
+	<a href="https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml">Feedback</a>
 </p>
 
 <p align="center">
@@ -105,6 +107,23 @@ The full product docs live at [clipy.online/docs](https://clipy.online/docs).
 4. Stop. The link is already copied.
 5. Send it to a person, or paste it into your AI agent.
 
+## Try Clipy and help shape it
+
+We build Clipy with the people who use it. Tell us how the Chrome extension,
+the iPhone and Android apps, the web app and the desktop app work for you.
+
+1. Get the [Chrome extension](https://chromewebstore.google.com/detail/clipy-screen-recorder-for/kpoeghpnpjdaglohmnemgkljahinendl), or the apps from
+   [clipy.online/download](https://clipy.online/download).
+2. Use it for something real: a bug report, a demo, a walkthrough for a
+   teammate.
+3. When something does not work the way you expected, record it with Clipy
+   and [send an app report](https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml) with the share link. Ideas go in a
+   [feature request](https://github.com/clipy-recorder/clipy/issues/new?template=feature_request.yml)
+   or in [Discussions](https://github.com/clipy-recorder/clipy/discussions).
+
+We read every report. Reports we reproduce get the `confirmed` label, and we
+credit the person who sent it when the change ships.
+
 ## Let your AI agent watch any video
 
 This repository is also a Claude Code plugin marketplace. In Claude Code:
@@ -118,6 +137,11 @@ Then `/watch <YouTube URL | Loom link | video file> [question]`, for example
 `/watch https://www.youtube.com/watch?v=<id> what are the main steps?`. Claude
 turns the video into an AREC on your machine and answers with timestamps.
 Details in [plugins/watch](plugins/watch/README.md).
+
+To show Claude your screen instead, add `/plugin install record@clipy` and run
+`/record` on your Mac or Windows PC. Clipy Local (or the Clipy app) records while you talk it
+through, you say stop, and Claude reads the AREC and gets to work. Details in
+[plugins/record](plugins/record/README.md).
 
 For Codex, Cursor and other agents, install the same workflow as a skill:
 
@@ -217,6 +241,7 @@ take an agent starts asks for your consent in the app.
 | `packages/capture` | Records the screen with ffmpeg on macOS, Windows and Linux, with a pointer and click sidecar where the OS allows it. |
 | `packages/transcribe` | Turns speech into timestamped segments: downloadable on-device models, or your own key for OpenAI, Groq, Deepgram, AssemblyAI, ElevenLabs or Gemini. |
 | `plugins/watch` | The Claude Code plugin that lets an agent watch any video. |
+| `plugins/record` | The Claude Code plugin that records your Mac or Windows screen so you can show an agent what you mean. |
 
 ## Where your data goes
 
@@ -235,7 +260,9 @@ running on your machine with Ollama or LM Studio.
 ## Contribute
 
 Build, test and pull request steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
-Issues labelled `good first issue` are a good place to start. Report security
+Issues labelled `good first issue` are a good place to start. Feedback on
+one of the apps rather than the code here? Use the
+[app report form](https://github.com/clipy-recorder/clipy/issues/new?template=app_bug_report.yml). Report security
 problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ```bash

@@ -1,7 +1,20 @@
 name: Feature request
-description: Suggest something the Clipy desktop app or the packages should do.
+description: Suggest something a Clipy app, the desktop app or the packages should do.
 labels: ["enhancement"]
 body:
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Chrome extension
+        - iPhone or iPad app
+        - Android app
+        - Web app (clipy.online)
+        - Desktop app from clipy.online/download
+        - Code in this repository (desktop app built from source, packages, CLI)
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
