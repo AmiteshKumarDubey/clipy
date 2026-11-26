@@ -75,6 +75,7 @@ longer (up to 29 minutes).
 
 ## More
 
+- The full guide, with one-command setup and troubleshooting: [clipy.online/docs/claude-code](https://clipy.online/docs/claude-code)
 - Let your AI agents watch videos too: the `watch` plugin in this marketplace.
 - The AREC format: [arecformat.org](https://arecformat.org)
 - Something not working? Run `clipy doctor`.

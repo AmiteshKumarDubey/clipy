@@ -108,6 +108,8 @@ claude --plugin-dir plugins/clipy-record
 
 ## More
 
+- The full guide, with one-command setup and troubleshooting:
+  [clipy.online/docs/claude-code](https://clipy.online/docs/claude-code).
 - Prefer typing? `/record` in the same marketplace does this from a command:
   [plugins/record](../record/README.md).
 - Let Claude watch any video, a YouTube link, a Loom link or a file:
