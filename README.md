@@ -47,6 +47,16 @@ Use Clipy for bug reports, product reviews, sales demos, support and
 onboarding walkthroughs, design feedback, async standups and any moment where
 showing is faster than writing it down.
 
+## Watch: Clipy open source in 90 seconds
+
+<a href="https://clipy.online/video/f8lshuommnk5"><img src=".github/assets/oss-guide-video.jpg" alt="Play the 90-second guide to open-source Clipy: install the CLI, record locally, AREC, hand it to your AI agent, /watch any video"></a>
+
+Install the CLI, record on your own machine, turn every take into an AREC,
+hand it to Claude Code, Codex or Cursor, and let any AI agent watch a YouTube
+link, a Loom link or a video file.
+[Watch it on Clipy](https://clipy.online/video/f8lshuommnk5), or give your
+agent the [agent-readable version](https://clipy.online/video/f8lshuommnk5.arec).
+
 ## Why Clipy
 
 - **Show, don't type.** Record a tab, a window or the whole screen, talk it
