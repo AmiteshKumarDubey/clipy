@@ -1,8 +1,7 @@
-# Contributing to Clipy Local
+# Contributing to Clipy
 
-Thanks for helping. This repository holds the local edition of Clipy: the
-packages that turn a screen recording into an AREC file on your own machine,
-and Clipy Local, the desktop app built from them.
+Thanks for helping. This repository holds the packages that turn a screen recording into an AREC
+file on your own machine, and the Clipy desktop app built from them.
 
 ## Ways to help
 
@@ -24,7 +23,7 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 | `packages/config` | Provider and transcription settings | TypeScript, Vitest |
 | `packages/capture` | Screen capture with ffmpeg | TypeScript, Vitest |
 | `packages/transcribe` | Speech to timestamped segments | TypeScript, Vitest |
-| `desktop/` | Clipy Local, the desktop app | Tauri 2 (Rust) and React |
+| `desktop/` | The Clipy desktop app | Tauri 2 (Rust) and React |
 
 The packages form one pnpm workspace at the root. `desktop/` is its own pnpm
 project with its own lockfile.
@@ -65,7 +64,7 @@ pnpm setup:native-deps            # macOS: downloads the FFmpeg framework
 pnpm exec tsc --noEmit
 bash scripts/test-rust.sh --locked --lib
 node --test scripts/desktop-packaging.test.mjs scripts/speech-permissions.test.mjs
-pnpm tauri:dev                    # run Clipy Local
+pnpm tauri:dev                    # run the desktop app
 ```
 
 The crates in `desktop/src-tauri/crates/` have their own `cargo test`.
@@ -87,7 +86,7 @@ The crates in `desktop/src-tauri/crates/` have their own `cargo test`.
 
 ## Licence and sign-off
 
-Clipy Local is licensed under Apache-2.0. By opening a pull request you agree
+This repository is licensed under Apache-2.0. By opening a pull request you agree
 that your contribution is licensed under the same terms (section 5 of the
 licence). There is no contributor licence agreement and no sign-off line to
 add.

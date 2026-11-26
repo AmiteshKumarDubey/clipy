@@ -7274,3 +7274,20 @@ a.cursor-target-zone {
 .clip-foot {
   background: var(--clip-foot);
 }
+
+/* First-launch update screen: a sliding bar while the download length is
+   unknown (components/FirstLaunchUpdate.tsx). */
+@keyframes first-launch-update-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+.first-launch-update-indeterminate {
+  animation: first-launch-update-slide 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .first-launch-update-indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}

@@ -237,7 +237,7 @@ fn reported_os() -> &'static str {
 /// anywhere: the NSIS installer writes `uninstall.exe`, the portable zip
 /// ships a `README.txt` that opens with `PORTABLE_README_TITLE` (see
 /// `desktop-release-windows.yml`), and the MSI leaves neither.
-fn installer_kind() -> Option<&'static str> {
+pub(crate) fn installer_kind() -> Option<&'static str> {
     if !cfg!(target_os = "windows") {
         return None;
     }

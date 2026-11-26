@@ -14,11 +14,11 @@ resolved.
 
 ## Scope
 
-This repository: the packages under `packages/` and Clipy Local under
+This repository: the packages under `packages/` and the desktop app under
 `desktop/`. The hosted Clipy service and the official Clipy apps have the
 same address for reports.
 
 ## Supported versions
 
-Fixes land on the `main` branch. Clipy Local is built from source, so build
+Fixes land on the `main` branch. The desktop app is built from source, so build
 from the latest `main` to get them.

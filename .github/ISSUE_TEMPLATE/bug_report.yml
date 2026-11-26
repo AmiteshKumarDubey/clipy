@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Clipy Local or the packages does not work as described.
+description: Something in the Clipy desktop app or the packages does not work as described.
 labels: ["bug"]
 body:
   - type: markdown
@@ -11,7 +11,7 @@ body:
     attributes:
       label: Area
       options:
-        - Clipy Local (desktop app)
+        - Clipy desktop app
         - packages/moments
         - packages/config
         - packages/capture
@@ -32,7 +32,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Build Clipy Local from main
+        1. Build the desktop app from main
         2. Record a window for 30 seconds with the microphone on
         3. ...
     validations:

@@ -83,7 +83,13 @@
     }
   },
   "app": {
-    "loading": "Carregando o Clipy…"
+    "loading": "Carregando o Clipy…",
+    "firstLaunchUpdate": {
+      "title": "Baixando o Clipy mais recente",
+      "body": "O Clipy {version} já saiu. Estamos baixando agora para você começar na versão mais nova.",
+      "installing": "Instalando. O Clipy vai abrir de novo em instantes.",
+      "percent": "{percent}%"
+    }
   },
   "local": {
     "expiry": {

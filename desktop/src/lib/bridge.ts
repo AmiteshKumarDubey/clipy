@@ -920,6 +920,36 @@ export function onUpdateReady(
   );
 }
 
+/** The first-launch update screen: a fresh install moving to the newest
+ * release before sign-in. `phase` is `downloading` or `installing`; null
+ * means there is nothing to show. */
+export interface FirstLaunchUpdateDto {
+  phase: "downloading" | "installing";
+  version: string;
+  percent: number | null;
+}
+
+/** Current first-launch update state, for a window that mounts after the
+ * event fired. */
+export async function getFirstLaunchUpdate(): Promise<FirstLaunchUpdateDto | null> {
+  if (LOCAL_EDITION) return null;
+  try {
+    return await invoke<FirstLaunchUpdateDto | null>("get_first_launch_update");
+  } catch {
+    // An older binary without the command: nothing to show.
+    return null;
+  }
+}
+
+export function onFirstLaunchUpdate(
+  handler: (info: FirstLaunchUpdateDto | null) => void,
+): Promise<UnlistenFn> {
+  if (LOCAL_EDITION) return Promise.resolve(() => {});
+  return listenIfAvailable<FirstLaunchUpdateDto | null>("first-launch-update", (event) =>
+    handler(event.payload ?? null),
+  );
+}
+
 /** Install the staged update and restart. Rejects (with a human-readable
  * reason) if a recording or upload is still running — the gate is
  * authoritative in Rust, the UI only mirrors it. */

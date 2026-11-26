@@ -83,7 +83,13 @@
     }
   },
   "app": {
-    "loading": "Clipy を読み込み中…"
+    "loading": "Clipy を読み込み中…",
+    "firstLaunchUpdate": {
+      "title": "最新の Clipy を取得しています",
+      "body": "Clipy {version} が公開されています。最新バージョンで始められるよう、いまダウンロードしています。",
+      "installing": "インストールしています。まもなく Clipy が再び開きます。",
+      "percent": "{percent}%"
+    }
   },
   "local": {
     "expiry": {

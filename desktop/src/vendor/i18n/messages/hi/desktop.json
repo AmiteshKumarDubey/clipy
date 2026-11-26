@@ -83,7 +83,13 @@
     }
   },
   "app": {
-    "loading": "Clipy लोड हो रहा है…"
+    "loading": "Clipy लोड हो रहा है…",
+    "firstLaunchUpdate": {
+      "title": "नया Clipy लाया जा रहा है",
+      "body": "Clipy {version} आ गया है। इसे अभी डाउनलोड कर रहे हैं ताकि आप सबसे नए वर्ज़न से शुरू करें।",
+      "installing": "इंस्टॉल हो रहा है। Clipy थोड़ी देर में फिर से खुलेगा।",
+      "percent": "{percent}%"
+    }
   },
   "local": {
     "expiry": {

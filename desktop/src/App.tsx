@@ -31,8 +31,23 @@ import CursorTarget from "./routes/CursorTarget";
 import CursorTrail from "./routes/CursorTrail";
 import { LOCAL_EDITION } from "./lib/edition";
 import LocalEditionGate from "./edition-local/LocalEditionGate";
+import FirstLaunchUpdate from "./components/FirstLaunchUpdate";
 
+// The first-launch update screen covers the two windows a fresh install
+// shows: the setup window (a first launch opens it instead of the popover)
+// and the main popover (loading, sign-in or Home). Other windows never do.
 export default function App() {
+  const hash = window.location.hash;
+  const mainWindow = !LOCAL_EDITION && (hash === "" || hash === "#" || hash === "#onboarding");
+  return (
+    <>
+      <AppRoutes />
+      {mainWindow ? <FirstLaunchUpdate /> : null}
+    </>
+  );
+}
+
+function AppRoutes() {
   const t = useTranslations("desktop.app");
   const [hash, setHash] = useState(window.location.hash);
   const [state, setState] = useState<AuthStateDto | null>(null);

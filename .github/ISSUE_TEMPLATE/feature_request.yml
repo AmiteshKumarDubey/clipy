@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest something Clipy Local or the packages should do.
+description: Suggest something the Clipy desktop app or the packages should do.
 labels: ["enhancement"]
 body:
   - type: textarea
