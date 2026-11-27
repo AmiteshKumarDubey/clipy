@@ -1,12 +1,13 @@
 import type { EngineInterface } from 'claude-code'
 
+import { storedKey } from './signin'
+
 type $ = EngineInterface
 
 const CLIPY = 'https://clipy.online'
 const UTM = 'utm_source=claude-code&utm_medium=plugin&utm_campaign=record-button-cloud'
 /** Where a cloud session sends the person to record: their library, with New recording. */
 export const RECORD_URL = `${CLIPY}/videos?${UTM}`
-export const KEY_URL = `${CLIPY}/settings/api-keys?${UTM}`
 
 /**
  * Where the band records. `local`: this computer, through the Clipy app, and
@@ -22,8 +23,19 @@ export async function modeOf($: $): Promise<Mode> {
   return platform === 'macos' || platform === 'windows' ? 'local' : null
 }
 
+export type KeySource = 'env' | 'signin' | null
+
+/** CLIPY_API_KEY in the environment wins; else the key the band signed in for. */
+export async function keyFor($: $): Promise<{ key: string; source: KeySource }> {
+  const env = ((await $.env.get('CLIPY_API_KEY').catch(() => undefined)) ?? '').trim()
+  const saved = await storedKey($)
+  // The band shares its own key as CLIPY_API_KEY, which still counts as the sign-in's.
+  if (env && env !== saved) return { key: env, source: 'env' }
+  return saved ? { key: saved, source: 'signin' } : { key: '', source: null }
+}
+
 export async function apiKey($: $): Promise<string> {
-  return ((await $.env.get('CLIPY_API_KEY').catch(() => undefined)) ?? '').trim()
+  return (await keyFor($)).key
 }
 
 export type CloudRecording = {
@@ -48,7 +60,13 @@ export function newestOf(text: string): CloudRecording | null {
 }
 
 /** `serverTime`: the response's Date header as ISO, on the same clock that stamps createdAt. */
-export type Newest = { recording: CloudRecording | null; error: string | null; serverTime?: string | null }
+export type Newest = {
+  recording: CloudRecording | null
+  error: string | null
+  serverTime?: string | null
+  /** Clipy refused the key itself (401 or 403). */
+  refused?: boolean
+}
 
 /** An HTTP Date header as ISO; null when absent or unreadable. */
 export function isoFromHttpDate(value: string | undefined): string | null {
@@ -57,22 +75,37 @@ export function isoFromHttpDate(value: string | undefined): string | null {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null
 }
 
+function isApiError(text: string): boolean {
+  try {
+    return typeof (JSON.parse(text) as { error?: unknown }).error === 'string'
+  } catch {
+    return false
+  }
+}
+
 /** The newest recording in the person's Clipy library, read with their API key. */
 export async function fetchNewest($: $, key: string): Promise<Newest> {
   try {
     const r = await $.http.fetch(`${CLIPY}/api/v1/recordings?limit=1`, {
       headers: { Authorization: `Bearer ${key}`, Accept: 'application/json', 'User-Agent': 'clipy-record-plugin' },
     })
-    if (r.status === 401 || r.status === 403) {
+    // Only Clipy's own refusal counts: a 401, or a 403 carrying the API's JSON error.
+    // A 403 page from a proxy or WAF must not wipe a good key.
+    if (r.status === 401 || (r.status === 403 && isApiError(r.text))) {
       return {
         recording: null,
-        error: 'Clipy refused the CLIPY_API_KEY in this environment. Check the key and that it can read recordings.',
+        refused: true,
+        error: 'Clipy refused the key. Check it can read recordings, or sign in again.',
       }
     }
     if (!r.ok) return { recording: null, error: `Clipy did not answer (${r.status}). Try again in a moment.` }
     return { recording: newestOf(r.text), error: null, serverTime: isoFromHttpDate(r.headers.date) }
-  } catch {
-    return { recording: null, error: "This session can't reach clipy.online. Allow it in the environment's network access." }
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e)
+    return {
+      recording: null,
+      error: `This session can't reach clipy.online (${why}). Allow it in the environment's network access.`,
+    }
   }
 }
 

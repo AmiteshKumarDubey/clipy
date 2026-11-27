@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'claude-code'
 
-import type { RecordState } from '../types'
-import { apiKey, cloudPrompt, fetchNewest, isNewer, isReadable, KEY_URL, modeOf, RECORD_URL, type Mode } from './cloud'
+import type { Destination, RecordState } from '../types'
+import { apiKey, cloudPrompt, fetchNewest, isNewer, isReadable, keyFor, modeOf, RECORD_URL, type Mode } from './cloud'
+import { exchangeCode, forgetKey, newLogin, pollLogin, saveKey, shareKey, storedKey, type Claim } from './signin'
 
 type $ = EngineInterface
 
@@ -14,6 +15,8 @@ const recording = atom({ plugin: 'clipy-record', key: 'state' } as const, IDLE)
 const elapsed = atom({ plugin: 'clipy-record', key: 'elapsed' } as const, 0)
 // Hidden with the band's Hide button or /record-button; kept across sessions in $.store.
 const hidden = atom({ plugin: 'clipy-record', key: 'hidden' } as const, false)
+// Local or Cloud on this computer, chosen on the band and kept across sessions.
+const destination = atom({ plugin: 'clipy-record', key: 'destination' } as const, 'local' as Destination)
 const COMMAND = 'record-button'
 
 // The first CLI that records through the official Clipy app and keeps the take local.
@@ -23,9 +26,15 @@ const STOP_TIMEOUT_MS = 360_000
 // How long to wait for the app to finish a take it stopped by itself.
 const READY_TIMEOUT_MS = 300_000
 const INSTALL_HINT = 'Install it with: npm i -g @clipy/cli'
-const GET_CLIPY_HINT =
-  'Get Clipy, free to start: https://clipy.online/download?utm_source=claude-code&utm_medium=plugin&utm_campaign=record-button' +
-  ' (or build Clipy Local, the open-source edition, from github.com/clipy-recorder/clipy)'
+const CLOUD_LOGIN_HINT = 'Run clipy login in a terminal and approve it in your browser, or switch the band to Local.'
+const OPEN_CLIPY_HINT =
+  'Open the Clipy app (or Clipy Local), then press Record again. Not installed yet? ' +
+  'https://clipy.online/download?utm_source=claude-code&utm_medium=plugin&utm_campaign=record-button'
+// The app stopped answering mid-take (quit or crashed): what it saved is in Clipy.
+const DEAD_ERROR = 'Clipy stopped answering during the recording, so nothing was sent to Claude.'
+const DEAD_HINT = 'Open Clipy: anything it saved is in its library, and you can send it from there.'
+// Status checks that can fail in a row before the band says so.
+const STATUS_FAILS_BEFORE_ERROR = 3
 const UPDATE_HINT = `Update it with: npm i -g @clipy/cli@latest (this button needs ${MIN_VERSION} or later)`
 
 // A cloud session asks the library every few seconds, gives up after half an
@@ -36,6 +45,11 @@ const CLOUD_PREPARE_MS = 180_000
 // A library check still unanswered after this is treated as lost, so a stalled
 // request never holds the band; the wait token stops a late answer doing harm.
 const CLOUD_CHECK_STALE_MS = 20_000
+// Sign-in asks whether the person approved every few seconds, for up to ten minutes.
+const LOGIN_POLL_EVERY_S = 3
+const LOGIN_WAIT_MS = 10 * 60_000
+const REFUSED_SIGNIN = 'Clipy refused the saved sign-in, so it was cleared. Sign in again.'
+const REFUSED_ENV = 'Clipy refused the CLIPY_API_KEY in this environment. Check the key and that it can read recordings.'
 
 // Local looks like the extension's Local AI (dark); cloud wears Clipy orange.
 const THEMES = {
@@ -116,6 +130,16 @@ export function parse(run: Run): { json: Record<string, unknown> | null; error: 
   return { json, error: line.replace(/^error:\s*/i, '') }
 }
 
+/** `--local` for a take kept on this computer; an uploading take is asked about without it. */
+const kept = (s: RecordState) => (s.upload ? [] : ['--local'])
+
+/** The share id in an uploaded take's stop output (`id`, else the end of `shareUrl`). */
+export function uploadedId(json: Record<string, unknown> | null): string {
+  if (typeof json?.id === 'string' && json.id) return json.id
+  const url = typeof json?.shareUrl === 'string' ? json.shareUrl : ''
+  return /\/video\/([A-Za-z0-9_-]+)/.exec(url)?.[1] ?? ''
+}
+
 // Module state: start and stop must share one folder, since a Clipy session
 // belongs to the folder it started in. Both are found again after a reload.
 let workDir = ''
@@ -183,13 +207,33 @@ function unwatch(): void {
 async function send($: $, arec: string, stoppedInApp: boolean): Promise<void> {
   unwatch()
   await update($, recording, () => IDLE)
-  void $.prompt.submit({
-    text:
-      `I just recorded my screen with Clipy to show you something${stoppedInApp ? ' (I stopped it in the Clipy app)' : ''}. ` +
+  submitOrSay(
+    $,
+    `I just recorded my screen with Clipy to show you something${stoppedInApp ? ' (I stopped it in the Clipy app)' : ''}. ` +
       `Read the recording at ${arec} ` +
       '(an AREC file: a timestamped transcript and key moments, each with a screenshot whose path is relative to the file), ' +
       "look at the screenshots that matter, then do what I asked in it. If it isn't clear, summarize what you saw and ask.",
-  })
+    arec,
+  )
+}
+
+/** Hands an uploaded take to Claude as its share link. */
+async function sendLink($: $, id: string): Promise<void> {
+  unwatch()
+  await update($, recording, () => IDLE)
+  submitOrSay($, cloudPrompt(id), `https://clipy.online/video/${id}`)
+}
+
+/** Sends the prompt; if Claude Code refuses it, the band says so and where the recording is. */
+export function submitOrSay($: $, text: string, where: string): void {
+  const notSent = (why: string) =>
+    fail($, `The recording is ready but could not be sent to Claude (${why}).`, `Paste this into the prompt: ${where}`)
+  void $.prompt.submit({ text }).then(
+    async result => {
+      if (result.drop) await notSent(result.drop)
+    },
+    async (e: unknown) => notSent(e instanceof Error ? e.message : String(e)),
+  )
 }
 
 /** The folder that holds a take's AREC, with its trailing separator. */
@@ -222,12 +266,20 @@ async function discarded($: $): Promise<void> {
 }
 
 /** The app ended the take (its Stop, Cancel, or the time limit): wait for the AREC, then send it. */
-async function finishedInApp($: $, options: PluginOptions, arec: string | null): Promise<void> {
+async function finishedInApp($: $, options: PluginOptions, arec: string | null, uploaded = false): Promise<void> {
   unwatch()
   await update($, recording, (s): RecordState => ({ ...s, phase: 'stopping' }))
   const c = await findCli($, options)
   // Clears the CLI's session file; the take itself is already the app's.
-  if (c) await clipy($, c, ['session', 'abort'], 30_000).catch(() => undefined)
+  if (c) await clipy($, c, ['session', 'abort'], 30_000)
+  if (uploaded) {
+    // The app uploads it; only the app knows its link, so the band says where it is.
+    return fail(
+      $,
+      'The recording was stopped in the Clipy app, so the band did not get its link.',
+      'It is in your Clipy library: copy its link from Clipy and paste it here.',
+    )
+  }
   if (!arec) return fail($, 'The recording was stopped in the Clipy app. Open it from Clipy to send it to Claude.')
   const until = (await $.clock.now()) + READY_TIMEOUT_MS
   while ((await $.clock.now()) < until) {
@@ -243,9 +295,22 @@ async function finishedInApp($: $, options: PluginOptions, arec: string | null):
   return send($, arec, true)
 }
 
+const LOST_CONTACT = "Can't reach Clipy to check on the recording"
+let statusFails = 0
+
+/** The app quit or crashed mid-take: clear the CLI's session so Record works again, and say so. */
+async function appDied($: $, options: PluginOptions): Promise<void> {
+  unwatch()
+  const c = await findCli($, options)
+  const run = c ? await clipy($, c, ['session', 'abort'], 30_000) : null
+  const cleared = run?.exitCode === 0
+  return fail($, DEAD_ERROR, cleared ? DEAD_HINT : `${DEAD_HINT} If Record then says a session is active, run: clipy session abort`)
+}
+
 /** Every second the timer; every few, whether the app still records. */
 function watch($: $, options: PluginOptions): void {
   if (stopWatching) return
+  statusFails = 0
   let n = 0
   const timer = $.clock.every(1000, () => {
     n += 1
@@ -257,14 +322,40 @@ function watch($: $, options: PluginOptions): void {
       if (n % 3 !== 0 || polling || !cli) return
       polling = true
       try {
-        const run = await clipy($, cli, ['session', 'status', '--local', '--json'], 20_000)
-        const state = parse(run).json?.state
+        const run = await clipy($, cli, ['session', 'status', ...kept(s), '--json'], 20_000)
+        const { json, error } = parse(run)
+        const state = json?.state
         const now = await read($, recording)
-        if (now.phase === 'recording' && (state === 'ended' || state === 'none')) {
-          await finishedInApp($, options, now.arec)
+        if (now.phase !== 'recording') return
+        if (state === 'ended' || state === 'none') {
+          statusFails = 0
+          await finishedInApp($, options, now.arec, now.upload === true)
+        } else if (state === 'recording') {
+          statusFails = 0
+          if (now.error?.startsWith(LOST_CONTACT)) {
+            await update($, recording, (st): RecordState => (st.phase === 'recording' ? { ...st, error: null } : st))
+          }
+        } else if (state === 'dead') {
+          // Once could be a blip while the app is busy; twice in a row, it is gone.
+          statusFails += 1
+          if (statusFails >= 2) await appDied($, options)
+        } else {
+          statusFails += 1
+          if (statusFails >= STATUS_FAILS_BEFORE_ERROR) {
+            const why = error || 'no answer'
+            await update($, recording, (st): RecordState =>
+              st.phase === 'recording' ? { ...st, error: `${LOST_CONTACT} (${why}). Still trying.` } : st,
+            )
+          }
         }
-      } catch {
-        // a missed poll is retried on the next one
+      } catch (e) {
+        statusFails += 1
+        if (statusFails >= STATUS_FAILS_BEFORE_ERROR) {
+          const why = e instanceof Error ? e.message : String(e)
+          await update($, recording, (st): RecordState =>
+            st.phase === 'recording' ? { ...st, error: `${LOST_CONTACT} (${why}). Still trying.` } : st,
+          )
+        }
       } finally {
         polling = false
       }
@@ -274,7 +365,8 @@ function watch($: $, options: PluginOptions): void {
 }
 
 async function start($: $, options: PluginOptions): Promise<void> {
-  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'starting' }))
+  const upload = (await read($, destination)) === 'cloud'
+  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'starting', upload }))
   const c = await findCli($, options)
   if (!c) return fail($, "Clipy's command line tool isn't installed.", INSTALL_HINT)
   if (isOlder(c.version, '0.19.0')) {
@@ -286,21 +378,36 @@ async function start($: $, options: PluginOptions): Promise<void> {
   const run = await clipy(
     $,
     c,
-    ['session', 'start', '--local', '--source', 'mac-screen', '--mic', '--max', String(max), '--title', 'Shown to Claude', '--json'],
+    [
+      'session',
+      'start',
+      ...(upload ? [] : ['--local']),
+      '--source',
+      'mac-screen',
+      '--mic',
+      '--max',
+      String(max),
+      '--title',
+      'Shown to Claude',
+      '--json',
+    ],
     60_000,
   )
   const { json, error } = parse(run)
   if (json?.state !== 'recording') {
     const tooOld = isOlder(c.version, MIN_VERSION)
     const noApp = /Neither the Clipy app nor Clipy Local is running/i.test(error)
-    const hint = tooOld ? `Your Clipy CLI is ${c.version}. ${UPDATE_HINT}` : noApp ? GET_CLIPY_HINT : null
+    const signedOut = upload && /auth_required|no API key|clipy login|sign in/i.test(error)
     cli = null
-    return fail($, error || 'Clipy could not start recording.', hint)
+    if (noApp) return fail($, "Clipy isn't open, so the recording didn't start.", OPEN_CLIPY_HINT)
+    if (signedOut) return fail($, 'Cloud recording needs Clipy signed in on this computer.', CLOUD_LOGIN_HINT)
+    const hint = tooOld ? `Your Clipy CLI is ${c.version}. ${UPDATE_HINT}` : null
+    return fail($, error || 'Clipy could not start recording, and did not say why.', hint)
   }
   const arec = typeof json.arec === 'string' && json.arec ? json.arec : null
   const now = await $.clock.now()
   await update($, elapsed, () => 0)
-  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'recording', startedAt: now, arec }))
+  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'recording', startedAt: now, arec, upload }))
   watch($, options)
 }
 
@@ -310,33 +417,47 @@ async function stop($: $, options: PluginOptions): Promise<void> {
   await update($, recording, (s): RecordState => ({ ...s, phase: 'stopping', error: null }))
   const c = await findCli($, options)
   if (!c) return fail($, "Clipy's command line tool isn't installed.", INSTALL_HINT)
-  const run = await clipy($, c, ['session', 'stop', '--local', '--json'], STOP_TIMEOUT_MS)
+  const run = await clipy($, c, ['session', 'stop', ...kept(before), '--json'], STOP_TIMEOUT_MS)
   const { json, error } = parse(run)
-  const arec = typeof json?.arec === 'string' ? json.arec : ''
-  if (arec) return send($, arec, false)
+  if (before.upload) {
+    const id = uploadedId(json)
+    if (id) return sendLink($, id)
+  } else {
+    const arec = typeof json?.arec === 'string' ? json.arec : ''
+    if (arec) return send($, arec, false)
+  }
   // Stopped in the app between two polls: the take is still there.
-  if (/stopped from the Clipy|no recording session/i.test(error) && before.arec) {
-    return finishedInApp($, options, before.arec)
+  if (/stopped from the Clipy|no recording session/i.test(error) && (before.arec || before.upload)) {
+    return finishedInApp($, options, before.arec, before.upload === true)
   }
   // Ask Clipy where the take stands, so the controls stay usable.
-  const state = parse(await clipy($, c, ['session', 'status', '--local', '--json'], 20_000)).json?.state
+  const state = parse(await clipy($, c, ['session', 'status', ...kept(before), '--json'], 20_000)).json?.state
   if (state === 'recording') {
     await update($, recording, (): RecordState => ({ ...before, phase: 'recording', error: error || 'Clipy did not stop.' }))
     return watch($, options)
   }
-  if (state === 'ended' && before.arec) return finishedInApp($, options, before.arec)
-  return fail($, error || 'Clipy did not return a recording.')
+  if (state === 'ended' && (before.arec || before.upload)) return finishedInApp($, options, before.arec, before.upload === true)
+  if (state === 'dead') return appDied($, options)
+  return fail($, error || 'Clipy did not return a recording, and did not say why.')
 }
 
 async function cancel($: $, options: PluginOptions): Promise<void> {
   unwatch()
   const before = await read($, recording)
   const c = await findCli($, options)
-  const run = c ? await clipy($, c, ['session', 'abort'], 30_000) : null
-  if (run && run.exitCode !== 0) {
+  if (!c) {
+    await update($, recording, (): RecordState => ({
+      ...before,
+      phase: 'recording',
+      error: "Clipy's command line tool didn't run, so the band can't cancel. Stop the recording in the Clipy app.",
+    }))
+    return watch($, options)
+  }
+  const run = await clipy($, c, ['session', 'abort'], 30_000)
+  if (run.exitCode !== 0) {
     // Never show Record while Clipy may still be recording: ask, and keep the controls if so.
-    const state = c ? parse(await clipy($, c, ['session', 'status', '--local', '--json'], 20_000)).json?.state : null
-    if (state !== 'none' && state !== 'ended') {
+    const state = parse(await clipy($, c, ['session', 'status', ...kept(before), '--json'], 20_000)).json?.state
+    if (state !== 'none' && state !== 'ended' && state !== 'dead') {
       const error = `Clipy could not cancel: ${parse(run).error}`
       await update($, recording, (): RecordState => ({ ...before, phase: 'recording', error }))
       return watch($, options)
@@ -355,12 +476,14 @@ async function startCloud($: $): Promise<void> {
   const end = async (error: string, hint: string | null = null): Promise<void> => {
     await update($, recording, (st): RecordState => (stillMine(st) ? { ...IDLE, error, hint } : st))
   }
-  const key = await apiKey($)
-  if (!key) {
-    return end('Add CLIPY_API_KEY to this cloud environment so the button can pick up your recording.', `Create a key: ${KEY_URL}`)
+  const { key, source } = await keyFor($)
+  // No key yet: sign in first, and the wait starts once it is done.
+  if (!key) return startSignIn($)
+  const { recording: newest, error, serverTime, refused } = await fetchNewest($, key)
+  if (refused && source === 'signin') {
+    return end(REFUSED_SIGNIN + (await forgetKeySafely($)))
   }
-  const { recording: newest, error, serverTime } = await fetchNewest($, key)
-  if (error) return end(error)
+  if (error) return end(refused ? REFUSED_ENV : error)
   const now = await $.clock.now()
   let mine = false
   await update($, recording, (st): RecordState => {
@@ -413,7 +536,7 @@ async function sendCloud($: $, id: string, token: number): Promise<void> {
   })
   if (!mine) return
   unwatch()
-  void $.prompt.submit({ text: cloudPrompt(id) })
+  submitOrSay($, cloudPrompt(id), `https://clipy.online/video/${id}`)
 }
 
 type Check = 'sent' | 'none' | 'recording' | 'preparing' | 'error'
@@ -424,14 +547,18 @@ async function checkCloud($: $, now: boolean): Promise<Check> {
   const w = s.cloud
   const token = s.startedAt
   if (s.phase !== 'waiting' || !w || token === null) return 'none'
-  const key = await apiKey($)
-  const { recording: r, error } = key
+  const { key, source } = await keyFor($)
+  const { recording: r, error, refused } = key
     ? await fetchNewest($, key)
-    : { recording: null, error: 'CLIPY_API_KEY is no longer set in this environment.' }
+    : { recording: null, error: 'There is no Clipy key any more. Cancel, then sign in again.', refused: false }
   const keep = (patch: Partial<RecordState>) =>
     update($, recording, (st): RecordState => (sameWait(st, token) ? { ...st, ...patch } : st))
+  if (refused && source === 'signin') {
+    await keep({ error: `${REFUSED_SIGNIN} Cancel first.${await forgetKeySafely($)}` })
+    return 'error'
+  }
   if (error) {
-    await keep({ error })
+    await keep({ error: refused ? REFUSED_ENV : error })
     return 'error'
   }
   if (!r || !isNewer(r, w.baselineId, w.baselineAt, w.since ?? null)) {
@@ -468,8 +595,10 @@ function watchCloud($: $): void {
       if (id === null) return
       try {
         await checkCloud($, false)
-      } catch {
-        // a missed check is retried on the next one
+      } catch (e) {
+        // The next check tries again; meanwhile the band says what went wrong.
+        const error = `Checking your Clipy library failed (${e instanceof Error ? e.message : String(e)}). Still trying.`
+        await update($, recording, (st): RecordState => (st.phase === 'waiting' ? { ...st, error } : st))
       } finally {
         endCheck(id)
       }
@@ -501,10 +630,131 @@ async function cancelCloud($: $): Promise<void> {
   await update($, recording, () => IDLE)
 }
 
+/** Whether `st` is still the sign-in that began at `token`. */
+const sameLogin = (st: RecordState, token: number) => st.phase === 'signin' && st.startedAt === token
+
+/** Cloud with no key: open a copy-code login and wait for the approval (or a pasted code). */
+async function startSignIn($: $): Promise<void> {
+  unwatch()
+  checking = null
+  let login
+  try {
+    login = await newLogin()
+  } catch (e) {
+    return fail($, `Couldn't start signing in to Clipy (${e instanceof Error ? e.message : String(e)}).`)
+  }
+  const token = await $.clock.now()
+  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'signin', startedAt: token, login }))
+  watchSignIn($)
+}
+
+/** Saves the key once, for whichever of the poll and the paste got it, then starts the wait. */
+async function finishSignIn($: $, token: number, claim: Claim): Promise<void> {
+  if ('pending' in claim) return
+  if ('error' in claim) {
+    const stopPolling = claim.kind !== 'transient'
+    await update($, recording, (st): RecordState =>
+      sameLogin(st, token) && st.login
+        ? {
+            ...st,
+            error: claim.error,
+            login: { ...st.login, errorTransient: !stopPolling, polling: stopPolling ? false : st.login.polling },
+          }
+        : st,
+    )
+    // Only the timeout keeps running, so a stuck login still ends; the paste still works.
+    if (stopPolling) loginPollingStopped = true
+    return
+  }
+  let mine = false
+  await update($, recording, (st): RecordState => {
+    if (!sameLogin(st, token)) return st
+    mine = true
+    return IDLE
+  })
+  if (!mine) return
+  unwatch()
+  let unshared: string | null
+  try {
+    unshared = await saveKey($, claim.key)
+  } catch (e) {
+    return fail($, `Signed in, but the key could not be saved (${e instanceof Error ? e.message : String(e)}).`)
+  }
+  const who = claim.email ? `Signed in to Clipy as ${claim.email}.` : 'Signed in to Clipy.'
+  $.ui.toast(unshared ? `${who} Claude's commands could not get the key (${unshared}), so private recordings need CLIPY_API_KEY.` : who)
+  await startCloud($)
+}
+
+// Set when polling cannot help; the timer then only enforces the timeout.
+let loginPollingStopped = false
+
+function watchSignIn($: $): void {
+  if (stopWatching) return
+  loginPollingStopped = false
+  let n = 0
+  const timer = $.clock.every(1000, () => {
+    n += 1
+    void (async () => {
+      const s = await read($, recording)
+      if (s.phase !== 'signin' || !s.login || s.startedAt === null) return
+      const token = s.startedAt
+      if ((await $.clock.now()) - token > LOGIN_WAIT_MS) {
+        return fail($, 'Signing in to Clipy timed out after 10 minutes. Press Sign in to try again.')
+      }
+      if (n % LOGIN_POLL_EVERY_S !== 0 || loginPollingStopped || s.login.polling === false) return
+      const id = await beginCheck($)
+      if (id === null) return
+      try {
+        const claim = await pollLogin($, s.login.verifier)
+        // A pending answer clears an error from an earlier poll that might have been passing,
+        // never one that ended polling; a paste's own error lives in the hint.
+        if ('pending' in claim && s.error && s.login.errorTransient) {
+          await update($, recording, (st): RecordState => (sameLogin(st, token) ? { ...st, error: null } : st))
+        }
+        await finishSignIn($, token, claim)
+      } catch (e) {
+        const error = `Checking the sign-in failed (${e instanceof Error ? e.message : String(e)}). Still trying.`
+        await update($, recording, (st): RecordState => (sameLogin(st, token) ? { ...st, error } : st))
+      } finally {
+        endCheck(id)
+      }
+    })()
+  })
+  stopWatching = timer.cancel
+}
+
+async function pasteCode($: $, value: string): Promise<void> {
+  const s = await read($, recording)
+  if (s.phase !== 'signin' || !s.login || s.startedAt === null) return
+  const token = s.startedAt
+  const code = value.trim()
+  if (!code) return
+  const claim = await exchangeCode($, code, s.login.verifier)
+  if ('error' in claim) {
+    await update($, recording, (st): RecordState => (sameLogin(st, token) ? { ...st, hint: claim.error } : st))
+    return
+  }
+  await finishSignIn($, token, claim)
+}
+
+async function forgetKeySafely($: $): Promise<string> {
+  try {
+    await forgetKey($)
+    return ''
+  } catch (e) {
+    return ` It could not be cleared (${e instanceof Error ? e.message : String(e)}); set CLIPY_API_KEY instead.`
+  }
+}
+
 export function clock(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+async function setDestination($: $, value: Destination): Promise<void> {
+  await $.store.set('destination', value)
+  await update($, destination, () => value)
 }
 
 async function setHidden($: $, value: boolean): Promise<void> {
@@ -528,18 +778,35 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: COMMAND, description: 'Show or hide the Record with Clipy button above the prompt' })
     await update($, hidden, () => false)
     if ((await $.store.get('hidden')) === true) await update($, hidden, () => true)
+    const saved = await $.store.get('destination').catch(() => undefined)
+    await update($, destination, (): Destination => (saved === 'cloud' ? 'cloud' : 'local'))
+    // A cloud session signed in earlier: Claude's commands get the key again.
+    if ((await modeOf($)) === 'cloud') {
+      const key = await storedKey($)
+      const denied = key ? await shareKey($, key).catch((e: unknown) => String(e)) : null
+      if (denied) $.ui.toast(`Signed in to Clipy, but Claude's commands could not get the key (${denied}).`)
+    }
     // A reload or a new session finds the band where the CLI says it is.
     const s = await read($, recording)
     const mode = await modeOf($)
     if (s.phase === 'recording' && mode === 'local') {
       const c = await findCli($, options)
-      const run = c ? await clipy($, c, ['session', 'status', '--local', '--json'], 20_000).catch(() => null) : null
-      const state = run ? parse(run).json?.state : null
+      const run = c ? await clipy($, c, ['session', 'status', ...kept(s), '--json'], 20_000) : null
+      const { json, error } = run ? parse(run) : { json: null, error: "Clipy's command line tool didn't run" }
+      const state = json?.state
       if (state === 'recording') watch($, options)
-      else if (state === 'ended') await finishedInApp($, options, s.arec)
-      else await update($, recording, () => IDLE)
+      else if (state === 'ended') await finishedInApp($, options, s.arec, s.upload === true)
+      else if (state === 'dead') await appDied($, options)
+      else if (state === 'none') await update($, recording, () => IDLE)
+      else {
+        // Unknown: keep Stop and Cancel and say why, rather than hide a take that may still run.
+        await update($, recording, (st): RecordState => ({ ...st, error: `${LOST_CONTACT} (${error || 'no answer'}). Still trying.` }))
+        watch($, options)
+      }
     } else if (s.phase === 'waiting' && s.cloud && mode === 'cloud') {
       watchCloud($)
+    } else if (s.phase === 'signin' && s.login && mode === 'cloud') {
+      watchSignIn($)
     } else if (s.phase !== 'idle') {
       await update($, recording, () => IDLE)
     }
@@ -556,8 +823,14 @@ export const register: Register = (on, options) => {
     if (state.phase === 'idle' && !state.error && (await read($, hidden))) return next(e)
     const elements = $.ui.resolve(e)
     const { Box, Button, Link, Text } = elements
-    const t = THEMES[mode]
-    const cloud = mode === 'cloud'
+    // `remote`: Claude Code itself runs in a cloud session, so Cloud is the only way.
+    // Otherwise the person picks: Local keeps the take here, Cloud uploads it for a link.
+    const remote = mode === 'cloud'
+    const dest: Destination = remote ? 'cloud' : await read($, destination)
+    // A take in flight keeps the look it started with, whatever the toggle says now.
+    const look: Destination = state.phase === 'recording' || state.phase === 'stopping' ? (state.upload ? 'cloud' : 'local') : dest
+    const t = THEMES[look]
+    const cloud = look === 'cloud'
     // The desktop app, VS Code and mobile draw SVG; the terminal keeps the dot.
     // The orange mark disappears on the orange cloud band, so cloud keeps the dot.
     const Svg = !cloud && e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
@@ -582,7 +855,9 @@ export const register: Register = (on, options) => {
       const status = state.error
         ? null
         : state.phase === 'recording'
-          ? 'Recording your screen and mic. Show Claude what you mean.'
+          ? state.upload
+            ? 'Recording your screen and mic; it uploads when you stop. Show Claude what you mean.'
+            : 'Recording your screen and mic. Show Claude what you mean.'
           : w?.id && w.uploadedAt === null
             ? 'Clipy is recording. Stop it in Clipy and Claude gets it.'
             : w?.id
@@ -619,11 +894,53 @@ export const register: Register = (on, options) => {
         </Box>,
       )
     }
+    if (state.phase === 'signin' && state.login) {
+      if (!stopWatching) watchSignIn($)
+      const waiting = state.login.polling !== false
+      const { Input } = elements
+      return band(
+        <Box key="row" justifyContent="space-between" flexGrow={1}>
+          <Box>
+            {chip}
+            <Text color={t.fg}>
+              {waiting
+                ? ' Approve in your browser and this signs in by itself. '
+                : ' Approve in your browser, then paste the code it shows. '}
+            </Text>
+            <Text color={t.fg}>
+              <Link key="signin-page" href={state.login.url} label="Open the sign-in page" />
+            </Text>
+            <Text color={t.fg} bold>
+              {`  Code ${state.login.confirm}`}
+            </Text>
+          </Box>
+          <Button key="cancel" hotkey="c" label="Cancel" dimColor onPress={() => cancelCloud($)} />
+        </Box>,
+        <Input
+          key="code"
+          placeholder="Or paste the code from that page"
+          submitLabel="Use code"
+          onSubmit={value => pasteCode($, value)}
+        />,
+        state.error ? (
+          <Text key="error" color={t.error} bold>
+            {state.error}
+          </Text>
+        ) : null,
+        state.hint ? (
+          <Text key="hint" color={t.fg}>
+            {state.hint}
+          </Text>
+        ) : null,
+      )
+    }
     if (state.phase === 'starting' || state.phase === 'stopping') {
       const text =
         state.phase === 'stopping'
-          ? 'Clipy is building the recording on this computer…'
-          : cloud
+          ? state.upload
+            ? 'Clipy is uploading the recording…'
+            : 'Clipy is building the recording on this computer…'
+          : remote
             ? 'Checking your Clipy library…'
             : 'Starting Clipy…'
       return band(
@@ -632,18 +949,20 @@ export const register: Register = (on, options) => {
             {chip}
             <Text color={t.fg}> {text}</Text>
           </Box>
-          {cloud && state.phase === 'starting' ? (
+          {remote && state.phase === 'starting' ? (
             <Button key="cancel" hotkey="c" label="Cancel" dimColor onPress={() => cancelCloud($)} />
           ) : null}
         </Box>,
       )
     }
-    const noKey = cloud && !state.error && !(await apiKey($))
+    const noKey = remote && !(await apiKey($))
     const idleText = noKey
-      ? 'Add CLIPY_API_KEY to this cloud environment to send recordings here.'
-      : cloud
+      ? 'Sign in to Clipy so this session can pick up your recordings.'
+      : remote
         ? 'Record on your computer; Claude reads the share link.'
-        : 'Show Claude your screen instead of typing it out'
+        : cloud
+          ? 'Uploads to Clipy; Claude gets the share link.'
+          : 'Stays on this computer; Claude reads the file.'
     return band(
       <Box key="row" justifyContent="space-between" flexGrow={1}>
           <Box>
@@ -658,22 +977,30 @@ export const register: Register = (on, options) => {
                 {idleText}
               </Text>
             )}
-            {noKey ? (
-              <Text color={t.fg}>
-                {' '}
-                <Link key="key" href={KEY_URL} label="Get a key" />
-              </Text>
-            ) : null}
           </Box>
           <Box>
             {Svg ? <Svg key="mark" source={CLIPY_MARK} alt="Clipy" width={18} height={18} /> : null}
             {Svg ? <Text> </Text> : null}
-            <Button
-              key="record"
-              hotkey="r"
-              label={Svg ? 'Record with Clipy' : '● Record with Clipy'}
-              onPress={() => (cloud ? startCloud($) : start($, options))}
-            />
+            {noKey ? (
+              <Button key="signin" hotkey="i" label="Sign in to Clipy" onPress={() => startSignIn($)} />
+            ) : (
+              <Button
+                key="record"
+                hotkey="r"
+                label={Svg ? 'Record with Clipy' : '● Record with Clipy'}
+                onPress={() => (remote ? startCloud($) : start($, options))}
+              />
+            )}
+            {remote ? null : <Text> </Text>}
+            {remote ? null : (
+              <Button
+                key="destination"
+                hotkey="m"
+                label={cloud ? 'Switch to Local' : 'Switch to Cloud'}
+                dimColor
+                onPress={() => setDestination($, cloud ? 'local' : 'cloud')}
+              />
+            )}
             <Text> </Text>
             <Button key="hide" hotkey="h" label="Hide" dimColor onPress={() => setHidden($, true)} />
           </Box>

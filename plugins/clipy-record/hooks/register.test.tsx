@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { clock as format, splitCommand } from './register'
+import { confirmationCode } from './signin'
 
 const BAND = {
   plugin: 'clipy-record',
@@ -20,7 +21,16 @@ const BAND = {
 const SURFACES = ['terminal', 'desktop'] as const
 
 type Out = { exitCode: number; stdout: string; stderr: string }
-type Cli = { version?: string | null; start?: Out | 'throw'; stop?: Out | 'throw'; abort?: 'throw'; status?: string }
+type Cli = {
+  version?: string | null
+  start?: Out | 'throw'
+  stop?: Out | 'throw'
+  abort?: 'throw'
+  /** What `session status` says; 'fail' makes the command itself fail. */
+  status?: string
+  /** Claude Code refuses the prompt the band submits. */
+  submitDeny?: string
+}
 
 const ran = (o: Out) => ({ value: { ...o, isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -51,6 +61,7 @@ function host(on: On, cli: Cli, platform: 'macos' | 'linux' = 'macos') {
     }
     if (args.includes('session abort') && cli.abort === 'throw') return { deny: 'could not launch' }
     if (args.includes('session status')) {
+      if (cli.status === 'fail') return ran({ exitCode: 1, stdout: '', stderr: 'error: bridge timed out\n' })
       return ran({ exitCode: 0, stdout: `{"state":"${cli.status ?? 'recording'}"}`, stderr: '' })
     }
     if (args.includes('session stop')) {
@@ -66,6 +77,7 @@ function host(on: On, cli: Cli, platform: 'macos' | 'linux' = 'macos') {
     return ran({ exitCode: 0, stdout: '{}', stderr: '' })
   })
   on('prompt.submit', (_, e) => {
+    if (cli.submitDeny) return { drop: cli.submitDeny }
     prompts.push(e.text)
     return { text: e.text }
   })
@@ -235,7 +247,7 @@ test('Hide tucks the band away across sessions and /record-button brings it back
   }
 })
 
-test('with no Clipy app running, the band says where to get it', async ($, on) => {
+test('with no Clipy app running, the band says to open it and where to get it', async ($, on) => {
   host(on, {
     version: '0.20.0',
     start: {
@@ -247,7 +259,10 @@ test('with no Clipy app running, the band says where to get it', async ($, on) =
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'record' })
 
-  expect((await ui.find({ type: 'Text', text: /utm_source=claude-code/ }))?.text).toContain('Clipy Local')
+  expect((await ui.find({ type: 'Text', text: /isn't open/ }))?.text).toBe("Clipy isn't open, so the recording didn't start.")
+  const hint = (await ui.find({ type: 'Text', text: /utm_source=claude-code/ }))?.text
+  expect(hint).toContain('Open the Clipy app')
+  expect(hint).toContain('Clipy Local')
   await ui.unmount()
 })
 
@@ -381,15 +396,26 @@ function cloudHost(
   on: On,
   env: Record<string, string> = { CLAUDE_CODE_REMOTE: 'true', CLIPY_API_KEY: 'clipy_test_key' },
   isHosted = false,
+  stored: Record<string, unknown> = {},
 ) {
   const library: Rec[] = [{ id: 'old1', createdAt: '2026-11-27T09:00:00.000Z', stage: 'ready', agentReadiness: 'complete' }]
   const prompts: string[] = []
   const runs: string[][] = []
   const auth: string[] = []
   const clock = mock.clock(on)
-  mock.env(on, env)
+  // The environment, read and written: the band shares its key as CLIPY_API_KEY.
+  const vars: Record<string, string | undefined> = { ...env }
+  on('env.get', (_, e) => ({ value: vars[e.name] }))
+  on('env.set', (_, e) => {
+    vars[e.name] = e.value
+    return { value: {} }
+  })
+  mock.store(on, stored)
   // The next answers the API gives, in order; empty means the library as it stands.
   const answers: Answer[] = []
+  // Sign-in: the poll stays pending until `login.approved`; the paste works for `login.code`.
+  const login = { approved: false, code: 'good-code', pollStatus: 0, verifiers: [] as string[] }
+  const signinBodies: string[] = []
   on('session.info', () => ({ value: { platform: 'linux' as const, isHosted, transcriptPath: '/t.jsonl' } }))
   on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data/clipy-record' } }))
   on('process.run', (_, e) => {
@@ -397,6 +423,22 @@ function cloudHost(
     return { deny: 'no Clipy app in a cloud session' }
   })
   on('http.fetch', (_, e) => {
+    const reply = (status: number, body: unknown) => ({
+      value: { status, ok: status < 300, headers: {}, text: JSON.stringify(body) },
+    })
+    if (e.url.endsWith('/api/cli-auth/poll')) {
+      signinBodies.push(String(e.init?.body ?? ''))
+      if (login.pollStatus) return reply(login.pollStatus, { error: 'Not found' })
+      return login.approved
+        ? reply(200, { apiKey: 'clipy_signed_in', scopes: ['recordings:read'], email: 'me@example.test' })
+        : reply(202, { status: 'pending' })
+    }
+    if (e.url.endsWith('/api/cli-auth/exchange')) {
+      const body = JSON.parse(String(e.init?.body ?? '{}')) as { code?: string }
+      return body.code === login.code
+        ? reply(200, { apiKey: 'clipy_pasted', scopes: ['recordings:read'], email: null })
+        : reply(400, { error: 'invalid or expired code' })
+    }
     auth.push(String((e.init?.headers as Record<string, string> | undefined)?.Authorization ?? ''))
     const answer = answers.shift()
     if (answer === 'hang') return new Promise<never>(() => {})
@@ -415,7 +457,7 @@ function cloudHost(
     return { value: undefined }
   })
   const add = (r: Rec) => library.unshift(r)
-  return { library, prompts, runs, auth, clock, add, answers, toasts }
+  return { library, prompts, runs, auth, clock, add, answers, toasts, login, signinBodies, vars }
 }
 
 test('a local session draws the dark Local band; a cloud session the orange Cloud band', async ($, on) => {
@@ -423,8 +465,8 @@ test('a local session draws the dark Local band; a cloud session the orange Clou
   const local = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const drawn = JSON.stringify(await local.findAll({}))
   expect(drawn).toContain('#18181B')
-  expect(drawn).toContain(' Local ')
-  expect(drawn).not.toContain(' Cloud ')
+  expect(drawn).toContain('[" Local "]')
+  expect(drawn).not.toContain('[" Cloud "]')
   await local.unmount()
 })
 
@@ -504,14 +546,78 @@ test('cloud: Send now sends a recording that is still preparing', async ($, on) 
   await ui.unmount()
 })
 
-test('cloud with no CLIPY_API_KEY says where to get one', async ($, on) => {
-  const { prompts } = cloudHost(on, { CLAUDE_CODE_REMOTE: 'true' })
+const NO_KEY = { CLAUDE_CODE_REMOTE: 'true' }
+
+test('cloud with no key offers sign-in, which finishes by itself once approved', async ($, on) => {
+  const { login, auth, clock, signinBodies, toasts } = cloudHost(on, NO_KEY)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(JSON.stringify(await ui.findAll({}))).toContain('https://clipy.online/settings/api-keys')
+  expect(await ui.find({ key: 'record' })).toBeUndefined()
+  await ui.press({ key: 'signin' })
+
+  const drawn = JSON.stringify(await ui.findAll({}))
+  expect(drawn).toContain('https://clipy.online/cli/authorize?')
+  expect(drawn).toContain('mode=manual')
+  expect(drawn).toContain('scopes=recordings%3Aread')
+  expect(await ui.find({ key: 'code' })).toBeDefined()
+
+  await clock.advance(6_000)
+  expect(await ui.find({ key: 'code' })).toBeDefined()
+  // The poll proves itself with the verifier, and the challenge in the link is that verifier's hash.
+  const verifier = (JSON.parse(signinBodies[0]!) as { verifier: string }).verifier
+  expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+
+  login.approved = true
+  await clock.advance(3_000)
+  expect(toasts.at(-1)).toContain('me@example.test')
+  // Straight on to waiting for the recording, with the new key.
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  expect(auth.at(-1)).toBe('Bearer clipy_signed_in')
+  await ui.unmount()
+})
+
+test('cloud sign-in: a pasted code works, and a wrong one says so and keeps waiting', async ($, on) => {
+  const { auth } = cloudHost(on, NO_KEY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'signin' })
+  await ui.input({ key: 'code', text: 'wrong-code', kind: 'submit' })
+  expect((await ui.find({ type: 'Text', text: /didn't work or has expired/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'code' })).toBeDefined()
+  await ui.input({ key: 'code', text: 'good-code', kind: 'submit' })
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  expect(auth.at(-1)).toBe('Bearer clipy_pasted')
+  await ui.unmount()
+})
+
+test('cloud sign-in against a server without the poll asks for the code', async ($, on) => {
+  const { login, clock } = cloudHost(on, NO_KEY)
+  login.pollStatus = 404
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'signin' })
+  await clock.advance(3_000)
+  expect((await ui.find({ type: 'Text', text: /Paste the code/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'code' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a saved sign-in Clipy refuses is cleared and sign-in is offered again', async ($, on) => {
+  const { answers } = cloudHost(on, NO_KEY, false, { apiKey: 'clipy_revoked' })
+  answers.push({ status: 401, text: '{"error":"Invalid API key"}' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'record' })
-  expect((await ui.find({ type: 'Text', text: /CLIPY_API_KEY/ }))?.text).toBeDefined()
-  expect(await ui.find({ key: 'record' })).toBeDefined()
-  expect(prompts).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /refused the saved sign-in/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'signin' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('cloud sign-in can be cancelled, and gives up after ten minutes', async ($, on) => {
+  const { clock } = cloudHost(on, NO_KEY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'signin' })
+  await ui.press({ key: 'cancel' })
+  expect(await ui.find({ key: 'signin' })).toBeDefined()
+  await ui.press({ key: 'signin' })
+  await clock.advance(10 * 60_000 + 2_000)
+  expect((await ui.find({ type: 'Text', text: /timed out/ }))?.text).toBeDefined()
   await ui.unmount()
 })
 
@@ -612,5 +718,183 @@ test('cloud: a take still uploading when Record was pressed is not sent as the n
   await clock.advance(5_000)
   expect(prompts).toHaveLength(1)
   expect(prompts[0]).toContain('mine1')
+  await ui.unmount()
+})
+
+test('Clipy quitting mid-recording says so, clears the session, and Record works again', async ($, on) => {
+  const cli: Cli = { version: '0.20.0' }
+  const { calls, prompts, clock } = host(on, cli)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  cli.status = 'dead'
+  // One dead answer could be a blip; the band waits for a second.
+  await clock.advance(3_000)
+  expect(await ui.find({ key: 'stop' })).toBeDefined()
+  await clock.advance(3_000)
+  expect((await ui.find({ type: 'Text', text: /stopped answering/ }))?.text).toContain('nothing was sent')
+  expect((await ui.find({ type: 'Text', text: /Open Clipy/ }))?.text).toBeDefined()
+  expect(calls.some(c => c.join(' ').includes('session abort'))).toBe(true)
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('status checks that keep failing show an error but keep Stop and Cancel, and recover', async ($, on) => {
+  const cli: Cli = { version: '0.20.0' }
+  const { clock } = host(on, cli)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'record' })
+  cli.status = 'fail'
+  await clock.advance(9_000)
+  expect((await ui.find({ type: 'Text', text: /Can't reach Clipy/ }))?.text).toContain('bridge timed out')
+  expect(await ui.find({ key: 'stop' })).toBeDefined()
+  expect(await ui.find({ key: 'cancel' })).toBeDefined()
+  cli.status = 'recording'
+  await clock.advance(3_000)
+  expect(await ui.find({ type: 'Text', text: /Can't reach Clipy/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a prompt Claude Code refuses leaves the path in the band instead of losing it', async ($, on) => {
+  host(on, { version: '0.20.0', submitDeny: 'a turn is running' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  await ui.press({ key: 'stop' })
+  expect((await ui.find({ type: 'Text', text: /could not be sent to Claude/ }))?.text).toContain('a turn is running')
+  expect((await ui.find({ type: 'Text', text: /Paste this into the prompt/ }))?.text).toContain('/recordings/take/recording.arec')
+  await ui.unmount()
+})
+
+test('stop when Clipy has quit says so instead of a generic failure', async ($, on) => {
+  const cli: Cli = { version: '0.20.0', stop: { exitCode: 1, stdout: '', stderr: 'error: the Clipy app is not answering\n' } }
+  host(on, cli)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  cli.status = 'dead'
+  await ui.press({ key: 'stop' })
+  expect((await ui.find({ type: 'Text', text: /stopped answering/ }))?.text).toBeDefined()
+  await ui.unmount()
+})
+
+test('Switch to Cloud records through the app with upload and sends Claude the share link', async ($, on) => {
+  const cli: Cli = {
+    version: '0.20.0',
+    stop: { exitCode: 0, stdout: '{"id":"abc123","shareUrl":"https://clipy.online/video/abc123"}', stderr: '' },
+  }
+  const { calls, prompts } = host(on, cli)
+  mock.store(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'destination' })
+
+  const drawn = JSON.stringify(await ui.findAll({}))
+  expect(drawn).toContain('#FF4D29')
+  expect(drawn).toContain('[" Cloud "]')
+  expect((await ui.find({ key: 'destination' }))?.text).toBe('Switch to Local')
+
+  await ui.press({ key: 'record' })
+  const start = calls.find(c => c.join(' ').includes('session start'))
+  expect(start).not.toContain('--local')
+  // Status and stop for an uploading take are asked without --local too.
+  await ui.press({ key: 'stop' })
+  expect(calls.find(c => c.join(' ').includes('session stop'))).not.toContain('--local')
+  expect(prompts.at(-1)).toContain('https://clipy.online/video/abc123.arec')
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the Local/Cloud choice is kept across sessions', async ($, on) => {
+  host(on, { version: '0.20.0' })
+  mock.store(on, { destination: 'cloud' })
+  on('command.register', (_, e) => ({ value: { command: e.name } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(JSON.stringify(await ui.findAll({}))).toContain('[" Cloud "]')
+  await ui.unmount()
+})
+
+test('Cloud on this computer with the CLI signed out says how to sign in', async ($, on) => {
+  host(on, {
+    version: '0.20.0',
+    start: { exitCode: 1, stdout: '{"error":"no API key. Run clipy login to approve this device"}', stderr: '' },
+  })
+  mock.store(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'destination' })
+  await ui.press({ key: 'record' })
+  expect((await ui.find({ type: 'Text', text: /needs Clipy signed in/ }))?.text).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /clipy login/ }))?.text).toContain('switch the band to Local')
+  await ui.unmount()
+})
+
+test('a cloud session has no Local/Cloud toggle', async ($, on) => {
+  cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ key: 'destination' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the match code is computed as clipy.online computes it', async () => {
+  // The same vector is tested in lib/server/__tests__/cliAuthPoll.test.ts.
+  expect(await confirmationCode('VUjza-715nZd22cDut-6X__MMgZ8B9E2MP8fvGp1CSI')).toBe('7GV8-VNDY')
+})
+
+test('cloud sign-in shows the match code the approval page shows', async ($, on) => {
+  cloudHost(on, NO_KEY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'signin' })
+  const drawn = JSON.stringify(await ui.findAll({}))
+  const challenge = /challenge=([A-Za-z0-9_-]{43})/.exec(drawn)?.[1]
+  expect(challenge).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /Code / }))?.text).toContain(await confirmationCode(challenge!))
+  // The verifier itself is never drawn.
+  expect(drawn).not.toMatch(/verifier/i)
+  await ui.unmount()
+})
+
+test('cloud sign-in: a spent login stops polling and keeps its error, and the paste still works', async ($, on) => {
+  const { login, clock, signinBodies } = cloudHost(on, NO_KEY)
+  login.pollStatus = 400
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'signin' })
+  await clock.advance(3_000)
+  const polls = signinBodies.length
+  expect((await ui.find({ type: 'Text', text: /Cancel and sign in again/ }))?.text).toBeDefined()
+  await clock.advance(15_000)
+  expect(signinBodies.length).toBe(polls)
+  expect((await ui.find({ type: 'Text', text: /Cancel and sign in again/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'code' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a 403 page from a proxy does not wipe a saved sign-in', async ($, on) => {
+  const { answers } = cloudHost(on, NO_KEY, false, { apiKey: 'clipy_good' })
+  answers.push({ status: 403, text: '<html>Attention required</html>' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  expect((await ui.find({ type: 'Text', text: /Clipy did not answer \(403\)/ }))?.text).toBeDefined()
+  // Still signed in: Record, not Sign in.
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  expect(await ui.find({ key: 'signin' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('after sign-in, Claude’s own commands get the key as CLIPY_API_KEY', async ($, on) => {
+  const { login, clock, vars } = cloudHost(on, NO_KEY)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'signin' })
+  login.approved = true
+  await clock.advance(3_000)
+  expect(vars.CLIPY_API_KEY).toBe('clipy_signed_in')
+  await ui.unmount()
+})
+
+test('a key the person set is never replaced by the sign-in', async ($, on) => {
+  const { prompts, vars, auth } = cloudHost(on, { CLAUDE_CODE_REMOTE: 'true', CLIPY_API_KEY: 'clipy_mine' }, false, { apiKey: 'clipy_old' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  expect(vars.CLIPY_API_KEY).toBe('clipy_mine')
+  expect(auth.at(-1)).toBe('Bearer clipy_mine')
+  expect(prompts).toEqual([])
   await ui.unmount()
 })

@@ -1,4 +1,7 @@
-export type RecordPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'waiting'
+/** Where a recording made on this computer goes: kept here, or uploaded for a share link. */
+export type Destination = 'local' | 'cloud'
+
+export type RecordPhase = 'idle' | 'starting' | 'recording' | 'stopping' | 'waiting' | 'signin'
 
 /** A cloud session's wait for a recording made on the person's own computer. */
 export type CloudWait = {
@@ -25,10 +28,23 @@ export type RecordState = {
   hint: string | null
   /** Set while a cloud session waits for a recording; absent in a local one. */
   cloud?: CloudWait | null
+  /** This take uploads through the Clipy app (Cloud on this computer) instead of staying here. */
+  upload?: boolean
+  /** Set while a cloud session signs in to Clipy: the approval page and the PKCE verifier. */
+  login?: {
+    verifier: string
+    url: string
+    /** The match code the approval page shows too. */
+    confirm: string
+    /** False once polling cannot help (an older server, or a spent login); the paste still works. */
+    polling?: boolean
+    /** The error shown came from a poll that may work next time, so a pending answer clears it. */
+    errorTransient?: boolean
+  } | null
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'clipy-record': { state: RecordState; elapsed: number; hidden: boolean }
+    'clipy-record': { state: RecordState; elapsed: number; hidden: boolean; destination: Destination }
   }
 }
