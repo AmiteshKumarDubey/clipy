@@ -71,14 +71,17 @@ once and it remembers.
 
 ## Local or Cloud
 
-The band shows where the recording goes, the same way the Chrome extension
-does, and **Switch to Cloud** / **Switch to Local** changes it. Your choice is
-kept for next time; Local is the default.
+**Switch to Cloud** / **Switch to Local** on the band chooses where the
+recording goes, and the line beside the button says which one is on. Your
+choice is kept for next time; Local is the default.
 
-- **Local** (dark band): the button records through the Clipy app and the
-  recording stays on your computer. Claude reads the file.
-- **Cloud** (orange band): the Clipy app records and uploads it, and Claude
-  gets the share link. Clipy needs to be signed in on this computer
+- **Local**: the button records through the Clipy app and the recording stays
+  on your computer. Claude reads the file.
+- **Cloud** (Record with Clipy is the highlighted button): the Clipy app
+  records and uploads it, and Claude gets the share link.
+
+With more than one screen, the button records the screen Claude Code is on
+(the Claude app, your terminal or your editor), not the primary one. Clipy needs to be signed in on this computer
   (`clipy login`).
 
 When Claude Code itself runs in a cloud session, it can't see your screen, so

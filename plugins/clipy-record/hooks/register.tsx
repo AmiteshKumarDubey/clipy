@@ -3,6 +3,7 @@ import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'c
 
 import type { Destination, RecordState } from '../types'
 import { apiKey, cloudPrompt, fetchNewest, isNewer, isReadable, keyFor, modeOf, RECORD_URL, type Mode } from './cloud'
+import { hostDisplay } from './display'
 import { exchangeCode, forgetKey, newLogin, pollLogin, saveKey, shareKey, storedKey, type Claim } from './signin'
 
 type $ = EngineInterface
@@ -51,11 +52,6 @@ const LOGIN_WAIT_MS = 10 * 60_000
 const REFUSED_SIGNIN = 'Clipy refused the saved sign-in, so it was cleared. Sign in again.'
 const REFUSED_ENV = 'Clipy refused the CLIPY_API_KEY in this environment. Check the key and that it can read recordings.'
 
-// Local looks like the extension's Local AI (dark); cloud wears Clipy orange.
-const THEMES = {
-  local: { bg: '#18181B', fg: '#F4F4F5', chip: 'Local', chipBg: '#3F3F46', chipFg: '#F4F4F5', error: '#F87171', dot: '#FF4D29' },
-  cloud: { bg: '#FF4D29', fg: '#FFFFFF', chip: 'Cloud', chipBg: '#FFFFFF', chipFg: '#FF4D29', error: '#FFFFFF', dot: '#FFFFFF' },
-} as const
 
 type Run = { exitCode: number; stdout: string; stderr: string }
 type Cli = { wrap: (args: string[]) => string[]; version: string }
@@ -375,24 +371,36 @@ async function start($: $, options: PluginOptions): Promise<void> {
     return fail($, `The Clipy CLI on this computer is ${c.version}, too old for this button.`, UPDATE_HINT)
   }
   const max = Math.min(29, Math.max(1, Math.round(Number(options.maxMinutes) || 10))) * 60
-  const run = await clipy(
+  // On several screens, record the one Claude Code is on, not the primary one.
+  const display = await hostDisplay(
     $,
-    c,
-    [
-      'session',
-      'start',
-      ...(upload ? [] : ['--local']),
-      '--source',
-      'mac-screen',
-      '--mic',
-      '--max',
-      String(max),
-      '--title',
-      'Shown to Claude',
-      '--json',
-    ],
-    60_000,
+    async (argv, timeoutMs) => $.process.run(argv, { cwd: await dir($), timeoutMs }),
+    // Ask the app this take records with: Clipy Local answers only `--local --source mac-screen`.
+    () => clipy($, c, upload ? ['sources', '--json'] : ['sources', '--local', '--source', 'mac-screen', '--json'], 20_000),
   )
+  const startWith = (screen: string | null) =>
+    clipy(
+      $,
+      c,
+      [
+        'session',
+        'start',
+        ...(upload ? [] : ['--local']),
+        '--source',
+        'mac-screen',
+        ...(screen ? ['--display', screen] : []),
+        '--mic',
+        '--max',
+        String(max),
+        '--title',
+        'Shown to Claude',
+        '--json',
+      ],
+      60_000,
+    )
+  let run = await startWith(display)
+  // A screen unplugged since it was picked: record the default one rather than nothing.
+  if (display && parse(run).json?.state !== 'recording' && /display/i.test(parse(run).error)) run = await startWith(null)
   const { json, error } = parse(run)
   if (json?.state !== 'recording') {
     const tooOld = isOlder(c.version, MIN_VERSION)
@@ -829,18 +837,13 @@ export const register: Register = (on, options) => {
     const dest: Destination = remote ? 'cloud' : await read($, destination)
     // A take in flight keeps the look it started with, whatever the toggle says now.
     const look: Destination = state.phase === 'recording' || state.phase === 'stopping' ? (state.upload ? 'cloud' : 'local') : dest
-    const t = THEMES[look]
+    // The band keeps the prompt's own look; Cloud shows only on the Record button
+    // (the surface's primary button) and in the words beside it.
     const cloud = look === 'cloud'
     // The desktop app, VS Code and mobile draw SVG; the terminal keeps the dot.
-    // The orange mark disappears on the orange cloud band, so cloud keeps the dot.
-    const Svg = !cloud && e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
-    const chip = (
-      <Text backgroundColor={t.chipBg} color={t.chipFg} bold>
-        {` ${t.chip} `}
-      </Text>
-    )
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
     const band = (...rows: RenderChildren[]) => (
-      <Box flexDirection="column" flexGrow={1} backgroundColor={t.bg} paddingX={1}>
+      <Box flexDirection="column" flexGrow={1}>
         {rows}
       </Box>
     )
@@ -866,11 +869,10 @@ export const register: Register = (on, options) => {
       return band(
         <Box justifyContent="space-between" flexGrow={1}>
           <Box>
-            {chip}
-            <Text color={t.dot}> ● {clock(seconds)} </Text>
-            {state.error ? <Text color={t.error} bold={cloud}>{state.error}</Text> : <Text color={t.fg}>{status}</Text>}
+            <Text color="red">● {clock(seconds)} </Text>
+            {state.error ? <Text color="red">{state.error}</Text> : <Text>{status}</Text>}
             {state.phase === 'waiting' && !w?.id ? (
-              <Text color={t.fg}>
+              <Text>
                 {' '}
                 <Link key="open" href={RECORD_URL} label="Open Clipy" />
               </Text>
@@ -901,16 +903,15 @@ export const register: Register = (on, options) => {
       return band(
         <Box key="row" justifyContent="space-between" flexGrow={1}>
           <Box>
-            {chip}
-            <Text color={t.fg}>
+            <Text>
               {waiting
-                ? ' Approve in your browser and this signs in by itself. '
-                : ' Approve in your browser, then paste the code it shows. '}
+                ? 'Approve in your browser and this signs in by itself. '
+                : 'Approve in your browser, then paste the code it shows. '}
             </Text>
-            <Text color={t.fg}>
+            <Text>
               <Link key="signin-page" href={state.login.url} label="Open the sign-in page" />
             </Text>
-            <Text color={t.fg} bold>
+            <Text bold>
               {`  Code ${state.login.confirm}`}
             </Text>
           </Box>
@@ -923,12 +924,12 @@ export const register: Register = (on, options) => {
           onSubmit={value => pasteCode($, value)}
         />,
         state.error ? (
-          <Text key="error" color={t.error} bold>
+          <Text key="error" color="red">
             {state.error}
           </Text>
         ) : null,
         state.hint ? (
-          <Text key="hint" color={t.fg}>
+          <Text key="hint">
             {state.hint}
           </Text>
         ) : null,
@@ -946,8 +947,7 @@ export const register: Register = (on, options) => {
       return band(
         <Box justifyContent="space-between" flexGrow={1}>
           <Box>
-            {chip}
-            <Text color={t.fg}> {text}</Text>
+            <Text> {text}</Text>
           </Box>
           {remote && state.phase === 'starting' ? (
             <Button key="cancel" hotkey="c" label="Cancel" dimColor onPress={() => cancelCloud($)} />
@@ -966,14 +966,12 @@ export const register: Register = (on, options) => {
     return band(
       <Box key="row" justifyContent="space-between" flexGrow={1}>
           <Box>
-            {chip}
-            <Text> </Text>
             {state.error ? (
-              <Text color={t.error} bold={cloud}>
+              <Text color="red">
                 {state.error}
               </Text>
             ) : (
-              <Text color={t.fg} dimColor={!cloud}>
+              <Text dimColor>
                 {idleText}
               </Text>
             )}
@@ -982,12 +980,13 @@ export const register: Register = (on, options) => {
             {Svg ? <Svg key="mark" source={CLIPY_MARK} alt="Clipy" width={18} height={18} /> : null}
             {Svg ? <Text> </Text> : null}
             {noKey ? (
-              <Button key="signin" hotkey="i" label="Sign in to Clipy" onPress={() => startSignIn($)} />
+              <Button key="signin" hotkey="i" label="Sign in to Clipy" variant="primary" onPress={() => startSignIn($)} />
             ) : (
               <Button
                 key="record"
                 hotkey="r"
                 label={Svg ? 'Record with Clipy' : '● Record with Clipy'}
+                variant={cloud ? 'primary' : undefined}
                 onPress={() => (remote ? startCloud($) : start($, options))}
               />
             )}
@@ -1006,7 +1005,7 @@ export const register: Register = (on, options) => {
           </Box>
       </Box>,
       state.hint ? (
-        <Text key="hint" color={t.fg} dimColor={!cloud}>
+        <Text key="hint" dimColor>
           {state.hint}
         </Text>
       ) : null,
