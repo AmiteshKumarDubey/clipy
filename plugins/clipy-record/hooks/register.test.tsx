@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 
 import { clock as format, splitCommand } from './register'
 import { confirmationCode } from './signin'
+import { nameFromFind, nameFromInfo, pickDisplay } from './display'
 
 const BAND = {
   plugin: 'clipy-record',
@@ -30,6 +31,12 @@ type Cli = {
   status?: string
   /** Claude Code refuses the prompt the band submits. */
   submitDeny?: string
+  /** Screens: the host app's bundle id, what `lsappinfo find` prints, and `clipy sources --json`. */
+  bundle?: string
+  find?: string
+  sources?: unknown
+  /** The app refuses any --display, as after that monitor was unplugged. */
+  noDisplay?: true
 }
 
 const ran = (o: Out) => ({ value: { ...o, isStdoutTruncated: false, isStderrTruncated: false } })
@@ -48,15 +55,23 @@ function host(on: On, cli: Cli, platform: 'macos' | 'linux' = 'macos') {
   )
   on('session.info', () => ({ value: { platform, isHosted: false, transcriptPath: '/t.jsonl' } }))
   on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data/clipy-record' } }))
+  if (cli.bundle) on('env.get', (_, e) => ({ value: e.name === '__CFBundleIdentifier' ? cli.bundle : undefined }))
   on('process.run', (_, e) => {
     calls.push([...e.argv])
     const args = e.argv.join(' ')
+    if (e.argv[0] === 'lsappinfo') return ran({ exitCode: 0, stdout: args.includes('find') ? (cli.find ?? '') : '', stderr: '' })
+    if (args.includes(' sources ') || args.endsWith('sources --json') || args.includes("'sources'")) {
+      return ran({ exitCode: 0, stdout: JSON.stringify(cli.sources ?? { displays: [], windows: [] }), stderr: '' })
+    }
     if (args.includes('--version')) {
       if (cli.version == null) return { deny: 'not found' }
       return ran({ exitCode: 0, stdout: `${cli.version}\n`, stderr: '' })
     }
     if (args.includes('session start')) {
       if (cli.start === 'throw') return { deny: 'could not launch' }
+      if (cli.noDisplay && args.includes('--display')) {
+        return ran({ exitCode: 1, stdout: '', stderr: 'error: no display with id 1\n' })
+      }
       return ran(cli.start ?? { exitCode: 0, stdout: '{"state":"recording"}', stderr: '' })
     }
     if (args.includes('session abort') && cli.abort === 'throw') return { deny: 'could not launch' }
@@ -460,24 +475,23 @@ function cloudHost(
   return { library, prompts, runs, auth, clock, add, answers, toasts, login, signinBodies, vars }
 }
 
-test('a local session draws the dark Local band; a cloud session the orange Cloud band', async ($, on) => {
+test('a local session keeps the plain band and the plain Record button', async ($, on) => {
   host(on, { version: '0.20.0' })
   const local = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const drawn = JSON.stringify(await local.findAll({}))
-  expect(drawn).toContain('#18181B')
-  expect(drawn).toContain('[" Local "]')
-  expect(drawn).not.toContain('[" Cloud "]')
+  expect(drawn).not.toContain('backgroundColor')
+  expect(JSON.stringify(await local.find({ key: 'record' }))).not.toContain('primary')
+  expect(drawn).toContain('Stays on this computer')
   await local.unmount()
 })
 
-test('the cloud band is orange and says Cloud', async ($, on) => {
+test('in a cloud session Record is the primary button on a plain band', async ($, on) => {
   cloudHost(on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...BAND, surface })
     const drawn = JSON.stringify(await ui.findAll({}))
-    expect(drawn).toContain('#FF4D29')
-    expect(drawn).toContain(' Cloud ')
-    expect(await ui.find({ key: 'record' })).toBeDefined()
+    expect(drawn).not.toContain('backgroundColor')
+    expect(JSON.stringify(await ui.find({ key: 'record' }))).toContain('"variant":"primary"')
     await ui.unmount()
   }
 })
@@ -624,7 +638,8 @@ test('cloud sign-in can be cancelled, and gives up after ten minutes', async ($,
 test('a hosted session counts as cloud with no CLAUDE_CODE_REMOTE', async ($, on) => {
   cloudHost(on, { CLIPY_API_KEY: 'clipy_test_key' }, true)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(JSON.stringify(await ui.findAll({}))).toContain(' Cloud ')
+  expect(JSON.stringify(await ui.findAll({}))).toContain('Claude reads the share link')
+  expect(await ui.find({ key: 'destination' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -786,9 +801,8 @@ test('Switch to Cloud records through the app with upload and sends Claude the s
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'destination' })
 
-  const drawn = JSON.stringify(await ui.findAll({}))
-  expect(drawn).toContain('#FF4D29')
-  expect(drawn).toContain('[" Cloud "]')
+  expect(JSON.stringify(await ui.find({ key: 'record' }))).toContain('"variant":"primary"')
+  expect(JSON.stringify(await ui.findAll({}))).toContain('Uploads to Clipy')
   expect((await ui.find({ key: 'destination' }))?.text).toBe('Switch to Local')
 
   await ui.press({ key: 'record' })
@@ -809,7 +823,8 @@ test('the Local/Cloud choice is kept across sessions', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(JSON.stringify(await ui.findAll({}))).toContain('[" Cloud "]')
+  expect(JSON.stringify(await ui.find({ key: 'record' }))).toContain('"variant":"primary"')
+  expect((await ui.find({ key: 'destination' }))?.text).toBe('Switch to Local')
   await ui.unmount()
 })
 
@@ -896,5 +911,71 @@ test('a key the person set is never replaced by the sign-in', async ($, on) => {
   expect(vars.CLIPY_API_KEY).toBe('clipy_mine')
   expect(auth.at(-1)).toBe('Bearer clipy_mine')
   expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+// The layout from a real three-screen Mac: the built-in display is 1 at (0,0), two above it.
+const SCREENS = {
+  displays: [
+    { id: 4, x: 732, y: -1440, width: 3440, height: 1440 },
+    { id: 1, x: 0, y: 0, width: 1512, height: 982 },
+    { id: 3, x: -1828, y: -1440, width: 2560, height: 1440 },
+  ],
+  windows: [
+    { app_name: '\u200eWhatsApp', x: 1200, y: -1200, width: 1094, height: 842 },
+    { app_name: 'Claude', x: 2000, y: -30, width: 22, height: 22 },
+    { app_name: 'Claude', x: 0, y: 33, width: 1512, height: 949 },
+  ],
+}
+
+test('the screen Claude Code is on is the one recorded', () => {
+  expect(pickDisplay(SCREENS, 'Claude')).toBe(1)
+  expect(pickDisplay(SCREENS, 'WhatsApp')).toBe(4)
+  // A window straddling screens goes where its centre is.
+  expect(pickDisplay({ ...SCREENS, windows: [{ app_name: 'iTerm2', x: -400, y: -900, width: 1000, height: 600 }] }, 'iTerm2')).toBe(3)
+  // Nothing to choose with one screen, or with no real window of the app.
+  expect(pickDisplay({ ...SCREENS, displays: [SCREENS.displays[1]!] }, 'Claude')).toBeNull()
+  expect(pickDisplay(SCREENS, 'Cursor')).toBeNull()
+})
+
+test('lsappinfo output gives the host app name', () => {
+  expect(nameFromFind('ASN:0x0-0x392d92a-"Claude":\n')).toBe('Claude')
+  expect(nameFromFind('')).toBeNull()
+  expect(nameFromInfo('"iTerm2" ASN:0x0-0x16e16e0: (in front)\n    bundleID=[ NULL ]')).toBe('iTerm2')
+})
+
+test('Record passes the display of the app running Claude Code', async ($, on) => {
+  const { calls } = host(on, {
+    version: '0.20.0',
+    bundle: 'com.anthropic.claudefordesktop',
+    find: 'ASN:0x0-0x392d92a-"Claude":',
+    sources: SCREENS,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  const start = calls.find(c => c.join(' ').includes('session start'))!
+  expect(start).toEqual(expect.arrayContaining(['--display', '1']))
+  // Local asks the same app the take records with, so Clipy Local alone works too.
+  const sources = calls.find(c => c.join(' ').includes('sources'))!.join(' ')
+  expect(sources).toContain('--local')
+  expect(sources).toContain('mac-screen')
+  await ui.unmount()
+})
+
+test('a screen that cannot be found falls back to the default one', async ($, on) => {
+  const { calls } = host(on, {
+    version: '0.20.0',
+    bundle: 'com.anthropic.claudefordesktop',
+    find: 'ASN:0x0-0x1-"Claude":',
+    sources: SCREENS,
+    noDisplay: true,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  const starts = calls.filter(c => c.join(' ').includes('session start'))
+  expect(starts).toHaveLength(2)
+  expect(starts[0]).toContain('--display')
+  expect(starts[1]).not.toContain('--display')
+  expect(await ui.find({ key: 'stop' })).toBeDefined()
   await ui.unmount()
 })
