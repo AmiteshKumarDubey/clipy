@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register, RenderChildren } from 'claude-code'
 
 import type { RecordState } from '../types'
+import { apiKey, cloudPrompt, fetchNewest, isNewer, isReadable, KEY_URL, modeOf, RECORD_URL, type Mode } from './cloud'
 
 type $ = EngineInterface
 
@@ -26,6 +27,21 @@ const GET_CLIPY_HINT =
   'Get Clipy, free to start: https://clipy.online/download?utm_source=claude-code&utm_medium=plugin&utm_campaign=record-button' +
   ' (or build Clipy Local, the open-source edition, from github.com/clipy-recorder/clipy)'
 const UPDATE_HINT = `Update it with: npm i -g @clipy/cli@latest (this button needs ${MIN_VERSION} or later)`
+
+// A cloud session asks the library every few seconds, gives up after half an
+// hour, and sends a recording still preparing once it has had three minutes.
+const CLOUD_POLL_EVERY_S = 5
+const CLOUD_WAIT_MS = 30 * 60_000
+const CLOUD_PREPARE_MS = 180_000
+// A library check still unanswered after this is treated as lost, so a stalled
+// request never holds the band; the wait token stops a late answer doing harm.
+const CLOUD_CHECK_STALE_MS = 20_000
+
+// Local looks like the extension's Local AI (dark); cloud wears Clipy orange.
+const THEMES = {
+  local: { bg: '#18181B', fg: '#F4F4F5', chip: 'Local', chipBg: '#3F3F46', chipFg: '#F4F4F5', error: '#F87171', dot: '#FF4D29' },
+  cloud: { bg: '#FF4D29', fg: '#FFFFFF', chip: 'Cloud', chipBg: '#FFFFFF', chipFg: '#FF4D29', error: '#FFFFFF', dot: '#FFFFFF' },
+} as const
 
 type Run = { exitCode: number; stdout: string; stderr: string }
 type Cli = { wrap: (args: string[]) => string[]; version: string }
@@ -329,6 +345,162 @@ async function cancel($: $, options: PluginOptions): Promise<void> {
   await update($, recording, () => IDLE)
 }
 
+/** Cloud: remember the newest recording, then wait for one made after it. */
+async function startCloud($: $): Promise<void> {
+  // The first lookup can stall too: the band offers Cancel while it runs, and
+  // this token keeps a late answer from reviving a start that was cancelled.
+  const token = await $.clock.now()
+  await update($, recording, (): RecordState => ({ ...IDLE, phase: 'starting', startedAt: token }))
+  const stillMine = (st: RecordState) => st.phase === 'starting' && st.startedAt === token
+  const end = async (error: string, hint: string | null = null): Promise<void> => {
+    await update($, recording, (st): RecordState => (stillMine(st) ? { ...IDLE, error, hint } : st))
+  }
+  const key = await apiKey($)
+  if (!key) {
+    return end('Add CLIPY_API_KEY to this cloud environment so the button can pick up your recording.', `Create a key: ${KEY_URL}`)
+  }
+  const { recording: newest, error, serverTime } = await fetchNewest($, key)
+  if (error) return end(error)
+  const now = await $.clock.now()
+  let mine = false
+  await update($, recording, (st): RecordState => {
+    if (!stillMine(st)) return st
+    mine = true
+    return {
+      ...IDLE,
+      phase: 'waiting',
+      startedAt: now,
+      cloud: {
+        baselineId: newest?.id ?? null,
+        baselineAt: newest?.createdAt ?? null,
+        since: serverTime ?? null,
+        id: null,
+        uploadedAt: null,
+      },
+    }
+  })
+  if (!mine) return
+  await update($, elapsed, () => 0)
+  watchCloud($)
+}
+
+/** Whether `st` is still the wait that began at `token` (a Cancel, or a new Record, ends it). */
+const sameWait = (st: RecordState, token: number) => st.phase === 'waiting' && st.startedAt === token
+
+// The library check in flight, if any: one at a time, unless it has stalled.
+let checking: { id: number; at: number } | null = null
+let checks = 0
+
+async function beginCheck($: $): Promise<number | null> {
+  const now = await $.clock.now()
+  if (checking && now - checking.at < CLOUD_CHECK_STALE_MS) return null
+  checks += 1
+  checking = { id: checks, at: now }
+  return checks
+}
+
+function endCheck(id: number): void {
+  if (checking?.id === id) checking = null
+}
+
+async function sendCloud($: $, id: string, token: number): Promise<void> {
+  // Checked and cleared in one write, so a Cancel pressed while the library was read wins.
+  let mine = false
+  await update($, recording, (st): RecordState => {
+    if (!sameWait(st, token)) return st
+    mine = true
+    return IDLE
+  })
+  if (!mine) return
+  unwatch()
+  void $.prompt.submit({ text: cloudPrompt(id) })
+}
+
+type Check = 'sent' | 'none' | 'recording' | 'preparing' | 'error'
+
+/** Looks for the new recording and sends it once Claude can read it (or at once, with `now`). */
+async function checkCloud($: $, now: boolean): Promise<Check> {
+  const s = await read($, recording)
+  const w = s.cloud
+  const token = s.startedAt
+  if (s.phase !== 'waiting' || !w || token === null) return 'none'
+  const key = await apiKey($)
+  const { recording: r, error } = key
+    ? await fetchNewest($, key)
+    : { recording: null, error: 'CLIPY_API_KEY is no longer set in this environment.' }
+  const keep = (patch: Partial<RecordState>) =>
+    update($, recording, (st): RecordState => (sameWait(st, token) ? { ...st, ...patch } : st))
+  if (error) {
+    await keep({ error })
+    return 'error'
+  }
+  if (!r || !isNewer(r, w.baselineId, w.baselineAt, w.since ?? null)) {
+    if (s.error) await keep({ error: null })
+    return 'none'
+  }
+  const at = await $.clock.now()
+  const uploadedAt = r.stage === 'uploading' ? null : w.id === r.id && w.uploadedAt !== null ? w.uploadedAt : at
+  const settled = uploadedAt !== null && at - uploadedAt >= CLOUD_PREPARE_MS
+  if (uploadedAt !== null && (now || isReadable(r) || settled)) {
+    await sendCloud($, r.id, token)
+    return 'sent'
+  }
+  await keep({ error: null, cloud: { ...w, id: r.id, uploadedAt } })
+  return uploadedAt === null ? 'recording' : 'preparing'
+}
+
+/** Every second the timer; every few, the library. */
+function watchCloud($: $): void {
+  if (stopWatching) return
+  let n = 0
+  const timer = $.clock.every(1000, () => {
+    n += 1
+    void (async () => {
+      const s = await read($, recording)
+      if (s.phase !== 'waiting' || s.startedAt === null) return
+      const now = await $.clock.now()
+      await update($, elapsed, () => Math.floor((now - s.startedAt!) / 1000))
+      if (now - s.startedAt > CLOUD_WAIT_MS) {
+        return fail($, 'No new Clipy recording showed up in 30 minutes, so nothing was sent.')
+      }
+      if (n % CLOUD_POLL_EVERY_S !== 0) return
+      const id = await beginCheck($)
+      if (id === null) return
+      try {
+        await checkCloud($, false)
+      } catch {
+        // a missed check is retried on the next one
+      } finally {
+        endCheck(id)
+      }
+    })()
+  })
+  stopWatching = timer.cancel
+}
+
+/** Send now: the new recording even if it is still preparing; its AREC says so. */
+async function sendNow($: $): Promise<void> {
+  const id = await beginCheck($)
+  if (id === null) {
+    $.ui.toast('Still checking your Clipy library. Try Send now again in a few seconds.')
+    return
+  }
+  try {
+    const result = await checkCloud($, true)
+    if (result === 'none') $.ui.toast('No new recording in your Clipy library yet. Record one, then press Send now.')
+    if (result === 'recording') $.ui.toast('Clipy is still recording. Stop it in Clipy, and it is sent once it uploads.')
+  } finally {
+    endCheck(id)
+  }
+}
+
+async function cancelCloud($: $): Promise<void> {
+  unwatch()
+  // A check still out belongs to this wait; its token keeps it from touching the next one.
+  checking = null
+  await update($, recording, () => IDLE)
+}
+
 export function clock(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
@@ -358,13 +530,16 @@ export const register: Register = (on, options) => {
     if ((await $.store.get('hidden')) === true) await update($, hidden, () => true)
     // A reload or a new session finds the band where the CLI says it is.
     const s = await read($, recording)
-    if (s.phase === 'recording') {
+    const mode = await modeOf($)
+    if (s.phase === 'recording' && mode === 'local') {
       const c = await findCli($, options)
       const run = c ? await clipy($, c, ['session', 'status', '--local', '--json'], 20_000).catch(() => null) : null
       const state = run ? parse(run).json?.state : null
       if (state === 'recording') watch($, options)
       else if (state === 'ended') await finishedInApp($, options, s.arec)
       else await update($, recording, () => IDLE)
+    } else if (s.phase === 'waiting' && s.cloud && mode === 'cloud') {
+      watchCloud($)
     } else if (s.phase !== 'idle') {
       await update($, recording, () => IDLE)
     }
@@ -373,55 +548,123 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const { platform, isHosted } = await $.session.info()
-    if (isHosted || (platform !== 'macos' && platform !== 'windows')) return next(e)
+    const mode: Mode = await modeOf($)
+    if (!mode) return next(e)
 
     const state = await read($, recording)
     // A take in progress always shows, hidden or not.
     if (state.phase === 'idle' && !state.error && (await read($, hidden))) return next(e)
     const elements = $.ui.resolve(e)
-    const { Box, Button, Text } = elements
+    const { Box, Button, Link, Text } = elements
+    const t = THEMES[mode]
+    const cloud = mode === 'cloud'
     // The desktop app, VS Code and mobile draw SVG; the terminal keeps the dot.
-    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
+    // The orange mark disappears on the orange cloud band, so cloud keeps the dot.
+    const Svg = !cloud && e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : null
+    const chip = (
+      <Text backgroundColor={t.chipBg} color={t.chipFg} bold>
+        {` ${t.chip} `}
+      </Text>
+    )
+    const band = (...rows: RenderChildren[]) => (
+      <Box flexDirection="column" flexGrow={1} backgroundColor={t.bg} paddingX={1}>
+        {rows}
+      </Box>
+    )
 
-    if (state.phase === 'recording') {
-      if (!stopWatching) watch($, options)
+    if (state.phase === 'recording' || state.phase === 'waiting') {
+      if (!stopWatching) {
+        if (state.phase === 'waiting') watchCloud($)
+        else watch($, options)
+      }
       const seconds = await read($, elapsed)
-      return (
+      const w = state.cloud
+      const status = state.error
+        ? null
+        : state.phase === 'recording'
+          ? 'Recording your screen and mic. Show Claude what you mean.'
+          : w?.id && w.uploadedAt === null
+            ? 'Clipy is recording. Stop it in Clipy and Claude gets it.'
+            : w?.id
+              ? 'Clipy is preparing your recording for Claude…'
+              : 'Record in Clipy on your computer; Claude gets it when it is ready.'
+      return band(
         <Box justifyContent="space-between" flexGrow={1}>
           <Box>
-            <Text color="red">● {clock(seconds)} </Text>
-            {state.error ? (
-              <Text color="red">{state.error}</Text>
-            ) : (
-              <Text>Recording your screen and mic. Show Claude what you mean.</Text>
-            )}
+            {chip}
+            <Text color={t.dot}> ● {clock(seconds)} </Text>
+            {state.error ? <Text color={t.error} bold={cloud}>{state.error}</Text> : <Text color={t.fg}>{status}</Text>}
+            {state.phase === 'waiting' && !w?.id ? (
+              <Text color={t.fg}>
+                {' '}
+                <Link key="open" href={RECORD_URL} label="Open Clipy" />
+              </Text>
+            ) : null}
           </Box>
           <Box>
-            <Button key="stop" hotkey="s" label="Stop and send" onPress={() => stop($, options)} />
+            {state.phase === 'waiting' ? (
+              <Button key="send" hotkey="s" label="Send now" onPress={() => sendNow($)} />
+            ) : (
+              <Button key="stop" hotkey="s" label="Stop and send" onPress={() => stop($, options)} />
+            )}
             <Text> </Text>
-            <Button key="cancel" hotkey="c" label="Cancel" dimColor onPress={() => cancel($, options)} />
+            <Button
+              key="cancel"
+              hotkey="c"
+              label="Cancel"
+              dimColor
+              onPress={() => (state.phase === 'waiting' ? cancelCloud($) : cancel($, options))}
+            />
           </Box>
-        </Box>
+        </Box>,
       )
     }
     if (state.phase === 'starting' || state.phase === 'stopping') {
-      return (
-        <Box>
-          <Text dimColor>
-            {state.phase === 'starting' ? 'Starting Clipy…' : 'Clipy is building the recording on this computer…'}
-          </Text>
-        </Box>
+      const text =
+        state.phase === 'stopping'
+          ? 'Clipy is building the recording on this computer…'
+          : cloud
+            ? 'Checking your Clipy library…'
+            : 'Starting Clipy…'
+      return band(
+        <Box justifyContent="space-between" flexGrow={1}>
+          <Box>
+            {chip}
+            <Text color={t.fg}> {text}</Text>
+          </Box>
+          {cloud && state.phase === 'starting' ? (
+            <Button key="cancel" hotkey="c" label="Cancel" dimColor onPress={() => cancelCloud($)} />
+          ) : null}
+        </Box>,
       )
     }
-    return (
-      <Box flexDirection="column" flexGrow={1}>
-        <Box justifyContent="space-between" flexGrow={1}>
-          {state.error ? (
-            <Text color="red">{state.error}</Text>
-          ) : (
-            <Text dimColor>Show Claude your screen instead of typing it out</Text>
-          )}
+    const noKey = cloud && !state.error && !(await apiKey($))
+    const idleText = noKey
+      ? 'Add CLIPY_API_KEY to this cloud environment to send recordings here.'
+      : cloud
+        ? 'Record on your computer; Claude reads the share link.'
+        : 'Show Claude your screen instead of typing it out'
+    return band(
+      <Box key="row" justifyContent="space-between" flexGrow={1}>
+          <Box>
+            {chip}
+            <Text> </Text>
+            {state.error ? (
+              <Text color={t.error} bold={cloud}>
+                {state.error}
+              </Text>
+            ) : (
+              <Text color={t.fg} dimColor={!cloud}>
+                {idleText}
+              </Text>
+            )}
+            {noKey ? (
+              <Text color={t.fg}>
+                {' '}
+                <Link key="key" href={KEY_URL} label="Get a key" />
+              </Text>
+            ) : null}
+          </Box>
           <Box>
             {Svg ? <Svg key="mark" source={CLIPY_MARK} alt="Clipy" width={18} height={18} /> : null}
             {Svg ? <Text> </Text> : null}
@@ -429,14 +672,17 @@ export const register: Register = (on, options) => {
               key="record"
               hotkey="r"
               label={Svg ? 'Record with Clipy' : '● Record with Clipy'}
-              onPress={() => start($, options)}
+              onPress={() => (cloud ? startCloud($) : start($, options))}
             />
             <Text> </Text>
             <Button key="hide" hotkey="h" label="Hide" dimColor onPress={() => setHidden($, true)} />
           </Box>
-        </Box>
-        {state.hint ? <Text dimColor>{state.hint}</Text> : null}
-      </Box>
+      </Box>,
+      state.hint ? (
+        <Text key="hint" color={t.fg} dimColor={!cloud}>
+          {state.hint}
+        </Text>
+      ) : null,
     )
   })
 }

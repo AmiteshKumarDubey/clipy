@@ -29,7 +29,8 @@ Or add the marketplace first, which also gives you `/record` and `/watch`:
 ```
 
 The button then sits above the prompt in every Claude Code session on your Mac
-or Windows PC: in the terminal, the desktop app and VS Code.
+or Windows PC: in the terminal, the desktop app and VS Code. Cloud sessions get
+it too; see [Local and cloud sessions](#local-and-cloud-sessions).
 
 ## You also need Clipy on your computer
 
@@ -68,6 +69,26 @@ once and it remembers.
 - With the band focused (ctrl+x tab, or a click), `r` records, `s` stops and
   sends, `c` cancels and `h` hides.
 
+## Local and cloud sessions
+
+The band shows where the recording goes, the same way the Chrome extension
+does:
+
+- **Local** (dark band): Claude Code runs on your Mac or Windows PC. The
+  button records through the Clipy app and the recording stays on your
+  computer.
+- **Cloud** (orange band): Claude Code runs in a cloud session, which can't see
+  your screen. Press **Record with Clipy**, then record with Clipy on your
+  computer (the app, the Chrome extension or clipy.online). The band watches
+  your Clipy library and sends the new recording's link to Claude once its
+  transcript and summary are ready. **Send now** sends it straight away;
+  **Cancel** stops waiting.
+
+A cloud session needs a Clipy API key to find your recording: create one at
+[clipy.online/settings/api-keys](https://clipy.online/settings/api-keys) and
+add it to the cloud environment as `CLIPY_API_KEY`. The environment's network
+access must allow `clipy.online`.
+
 Recordings stop by themselves after 10 minutes. Change that, or point the
 button at a CLI that is not on your PATH, in `/config` under Record with Clipy.
 
@@ -84,8 +105,11 @@ validator is MIT. Read it at [arecformat.org](https://arecformat.org).
 
 ## Privacy
 
-- The video and the screenshots stay on your computer. Nothing is uploaded
-  unless you upload it yourself.
+- In a local session the video and the screenshots stay on your computer.
+  Nothing is uploaded unless you upload it yourself.
+- In a cloud session you record with Clipy's cloud recording, which uploads to
+  your Clipy library. The band only reads your newest recording with your API
+  key; it records nothing itself.
 - With the Clipy app, the transcript text, the names of what you clicked, a
   sample of your pointer and key activity and the size of the recorded area go
   to Clipy to pick the key moments. On Windows the audio also goes to Clipy for
@@ -99,8 +123,9 @@ validator is MIT. Read it at [arecformat.org](https://arecformat.org).
 
 ## Open source
 
-Apache-2.0, like the rest of this repository. The button is one file,
-[hooks/register.tsx](hooks/register.tsx), with its tests in
+Apache-2.0, like the rest of this repository. The button is
+[hooks/register.tsx](hooks/register.tsx) and, for cloud sessions,
+[hooks/cloud.ts](hooks/cloud.ts), with its tests in
 [hooks/register.test.tsx](hooks/register.test.tsx). To try a change, clone the
 repository and run:
 

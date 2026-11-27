@@ -371,3 +371,246 @@ test('upgrading the CLI after a too-old message works on the next press', async 
   expect(await ui.find({ key: 'stop' })).toBeDefined()
   await ui.unmount()
 })
+
+type Rec = { id: string; createdAt: string; stage: string; agentReadiness: string }
+
+/** A cloud session: Linux off the person's computer, a Clipy library read over the API. */
+type Answer = { status: number; text?: string } | 'hang'
+
+function cloudHost(
+  on: On,
+  env: Record<string, string> = { CLAUDE_CODE_REMOTE: 'true', CLIPY_API_KEY: 'clipy_test_key' },
+  isHosted = false,
+) {
+  const library: Rec[] = [{ id: 'old1', createdAt: '2026-11-27T09:00:00.000Z', stage: 'ready', agentReadiness: 'complete' }]
+  const prompts: string[] = []
+  const runs: string[][] = []
+  const auth: string[] = []
+  const clock = mock.clock(on)
+  mock.env(on, env)
+  // The next answers the API gives, in order; empty means the library as it stands.
+  const answers: Answer[] = []
+  on('session.info', () => ({ value: { platform: 'linux' as const, isHosted, transcriptPath: '/t.jsonl' } }))
+  on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data/clipy-record' } }))
+  on('process.run', (_, e) => {
+    runs.push([...e.argv])
+    return { deny: 'no Clipy app in a cloud session' }
+  })
+  on('http.fetch', (_, e) => {
+    auth.push(String((e.init?.headers as Record<string, string> | undefined)?.Authorization ?? ''))
+    const answer = answers.shift()
+    if (answer === 'hang') return new Promise<never>(() => {})
+    const status = answer?.status ?? 200
+    const text = answer?.text ?? JSON.stringify({ recordings: library.slice(0, 1) })
+    // The server's clock when Record is pressed: 09:30, after the old take and before the new ones.
+    return { value: { status, ok: status < 300, headers: { date: 'Fri, 27 Nov 2026 09:30:00 GMT' }, text } }
+  })
+  on('prompt.submit', (_, e) => {
+    prompts.push(e.text)
+    return { text: e.text }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  const add = (r: Rec) => library.unshift(r)
+  return { library, prompts, runs, auth, clock, add, answers, toasts }
+}
+
+test('a local session draws the dark Local band; a cloud session the orange Cloud band', async ($, on) => {
+  host(on, { version: '0.20.0' })
+  const local = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const drawn = JSON.stringify(await local.findAll({}))
+  expect(drawn).toContain('#18181B')
+  expect(drawn).toContain(' Local ')
+  expect(drawn).not.toContain(' Cloud ')
+  await local.unmount()
+})
+
+test('the cloud band is orange and says Cloud', async ($, on) => {
+  cloudHost(on)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const drawn = JSON.stringify(await ui.findAll({}))
+    expect(drawn).toContain('#FF4D29')
+    expect(drawn).toContain(' Cloud ')
+    expect(await ui.find({ key: 'record' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('cloud: record on the computer, and Claude gets the new recording once it is readable', async ($, on) => {
+  const { prompts, runs, auth, clock, add, library } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  expect(JSON.stringify(await ui.findAll({}))).toContain('https://clipy.online/videos')
+  expect(auth[0]).toBe('Bearer clipy_test_key')
+
+  // Still recording in Clipy: nothing is sent.
+  add({ id: 'new1', createdAt: '2026-11-27T10:00:00.000Z', stage: 'uploading', agentReadiness: 'preparing' })
+  await clock.advance(10_000)
+  expect(prompts).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /Clipy is recording/ }))?.text).toBeDefined()
+
+  // Transcript and summary in: sent, and the band is back to Record.
+  library[0] = { ...library[0]!, stage: 'annotating', agentReadiness: 'usable' }
+  await clock.advance(5_000)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('https://clipy.online/video/new1.arec')
+  expect(prompts[0]).not.toContain('old1')
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  // A cloud session never runs the Clipy CLI.
+  expect(runs).toEqual([])
+  await ui.unmount()
+})
+
+test('cloud: a recording still preparing after three minutes is sent anyway', async ($, on) => {
+  const { prompts, clock, add } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'record' })
+  add({ id: 'slow1', createdAt: '2026-11-27T10:00:00.000Z', stage: 'transcribing', agentReadiness: 'preparing' })
+  await clock.advance(60_000)
+  expect(prompts).toEqual([])
+  await clock.advance(180_000)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('slow1')
+  await ui.unmount()
+})
+
+test('cloud: Send now with nothing new keeps waiting; Cancel sends nothing', async ($, on) => {
+  const { prompts } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  await ui.press({ key: 'send' })
+  expect(prompts).toEqual([])
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  await ui.press({ key: 'cancel' })
+  expect(prompts).toEqual([])
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('cloud: Send now sends a recording that is still preparing', async ($, on) => {
+  const { prompts, add } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  add({ id: 'prep1', createdAt: '2026-11-27T10:00:00.000Z', stage: 'transcoding', agentReadiness: 'preparing' })
+  await ui.press({ key: 'send' })
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('prep1')
+  await ui.unmount()
+})
+
+test('cloud with no CLIPY_API_KEY says where to get one', async ($, on) => {
+  const { prompts } = cloudHost(on, { CLAUDE_CODE_REMOTE: 'true' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(JSON.stringify(await ui.findAll({}))).toContain('https://clipy.online/settings/api-keys')
+  await ui.press({ key: 'record' })
+  expect((await ui.find({ type: 'Text', text: /CLIPY_API_KEY/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('a hosted session counts as cloud with no CLAUDE_CODE_REMOTE', async ($, on) => {
+  cloudHost(on, { CLIPY_API_KEY: 'clipy_test_key' }, true)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(JSON.stringify(await ui.findAll({}))).toContain(' Cloud ')
+  await ui.unmount()
+})
+
+test('cloud: a refused key says so and keeps the band usable', async ($, on) => {
+  const { answers, prompts } = cloudHost(on)
+  answers.push({ status: 401, text: '{"error":"Invalid API key"}' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  expect((await ui.find({ type: 'Text', text: /refused the CLIPY_API_KEY/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('cloud: a request that never answers stops holding the band, and a later check sends', async ($, on) => {
+  const { answers, prompts, clock, add, toasts } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  answers.push('hang')
+  await clock.advance(5_000)
+  // The hung check holds the library read: Send now says so rather than doing nothing.
+  await ui.press({ key: 'send' })
+  expect(toasts.at(-1)).toContain('Still checking')
+  expect(prompts).toEqual([])
+  add({ id: 'late1', createdAt: '2026-11-27T10:00:00.000Z', stage: 'ready', agentReadiness: 'complete' })
+  // Checks keep backing off while the stalled one is fresh, then go ahead without it.
+  await clock.advance(10_000)
+  expect(prompts).toEqual([])
+  await clock.advance(15_000)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('late1')
+  await ui.unmount()
+})
+
+test('cloud: nothing new in 30 minutes ends the wait without sending', async ($, on) => {
+  const { prompts, clock } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'record' })
+  await clock.advance(30 * 60_000 + 2_000)
+  expect((await ui.find({ type: 'Text', text: /30 minutes/ }))?.text).toBeDefined()
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('cloud: a check from a cancelled wait never sends into the next one', async ($, on) => {
+  const { answers, prompts, clock, add } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  // This check stalls; the person cancels and records again before it gives up.
+  answers.push('hang')
+  await clock.advance(5_000)
+  await ui.press({ key: 'cancel' })
+  await clock.advance(1_000)
+  await ui.press({ key: 'record' })
+  add({ id: 'fresh1', createdAt: '2026-11-27T10:00:00.000Z', stage: 'ready', agentReadiness: 'complete' })
+  await clock.advance(15_000)
+  // Only the new wait's own check sends, and only once.
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('fresh1')
+  await ui.unmount()
+})
+
+test('cloud: a first lookup that stalls can be cancelled, and its late answer changes nothing', async ($, on) => {
+  const { answers, prompts, clock } = cloudHost(on)
+  answers.push('hang')
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // The press never settles while its lookup hangs, so it is not awaited.
+  void ui.press({ key: 'record' })
+  await clock.advance(100)
+  expect((await ui.find({ type: 'Text', text: /Checking your Clipy library/ }))?.text).toBeDefined()
+  await ui.press({ key: 'cancel' })
+  expect(await ui.find({ key: 'record' })).toBeDefined()
+  // Record again works, with the stalled start left behind.
+  await ui.press({ key: 'record' })
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  await clock.advance(10_000)
+  expect(prompts).toEqual([])
+  await ui.unmount()
+})
+
+test('cloud: a take still uploading when Record was pressed is not sent as the new one', async ($, on) => {
+  const { prompts, clock, add } = cloudHost(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'record' })
+  // Started at 09:15, before the press, and only listed once it plays.
+  add({ id: 'earlier1', createdAt: '2026-11-27T09:15:00.000Z', stage: 'ready', agentReadiness: 'complete' })
+  await clock.advance(10_000)
+  expect(prompts).toEqual([])
+  add({ id: 'mine1', createdAt: '2026-11-27T09:31:00.000Z', stage: 'ready', agentReadiness: 'complete' })
+  await clock.advance(5_000)
+  expect(prompts).toHaveLength(1)
+  expect(prompts[0]).toContain('mine1')
+  await ui.unmount()
+})
