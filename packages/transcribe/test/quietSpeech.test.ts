@@ -13,10 +13,12 @@ import { trimPieceToSpeech } from "../src/local.js";
 import { audioInputFor, piecesWithoutSpeech, type AudioInput } from "../src/providers/common.js";
 import { planChunks } from "../src/chunking.js";
 import { transcribeOpenAICompatible } from "../src/providers/openai.js";
-import { fakeServer, formData, json, tempDir, wavSeconds, type FakeServer } from "./helpers.js";
+import { ffmpegBin, hasFfmpeg, fakeServer, formData, json, tempDir, wavSeconds, type FakeServer } from "./helpers.js";
+
+const ffmpegAvailable = hasFfmpeg();
 
 function ff(args: string[]) {
-  execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+  execFileSync(ffmpegBin(), ["-hide_banner", "-loglevel", "error", "-y", ...args]);
 }
 
 let server: FakeServer | null = null;
@@ -40,7 +42,7 @@ describe("silenceThresholds", () => {
   });
 });
 
-describe("quiet speech", () => {
+describe.skipIf(!ffmpegAvailable)("quiet speech", () => {
   it("sends every piece holding quiet speech and reports the silent piece as a gap", async () => {
     const dir = tempDir();
     const wav = join(dir, "quiet.wav");
@@ -79,7 +81,7 @@ describe("quiet speech", () => {
   });
 });
 
-describe("a file with no audio track", () => {
+describe.skipIf(!ffmpegAvailable)("a file with no audio track", () => {
   it("is one gap over the file for every kind, not an error", async () => {
     const dir = tempDir();
     const video = join(dir, "video-only.mp4");
@@ -102,7 +104,7 @@ describe("a file with no audio track", () => {
   });
 });
 
-describe("file names with a colon", () => {
+describe.skipIf(!ffmpegAvailable)("file names with a colon", () => {
   it("are read as local files, not as an ffmpeg protocol", async () => {
     const dir = tempDir();
     const prev = process.cwd();
@@ -132,7 +134,7 @@ describe("trimPieceToSpeech", () => {
   });
 });
 
-describe("pieces of background noise", () => {
+describe.skipIf(!ffmpegAvailable)("pieces of background noise", () => {
   it("are not sent to engines that invent words in noise, in a recording at a normal level", async () => {
     const dir = tempDir();
     const wav = join(dir, "noise.wav");
@@ -151,7 +153,9 @@ describe("pieces of background noise", () => {
     expect(r.gaps).toHaveLength(1);
     expect(r.gaps[0].reason).toBe("no speech detected");
   });
+});
 
+describe("pieces of background noise (no ffmpeg)", () => {
   it("are skipped by the ordinary silences only for those engines, and never in a quiet recording", async () => {
     const plan = planChunks([], 300, { targetSec: 100, maxSec: 100, overlapSec: 0, minSec: 15 });
     // 100-200 s is silent to the ordinary threshold (noise) but not to the strict one.

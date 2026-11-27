@@ -82,11 +82,27 @@ export function wavSeconds(buf: Buffer): number {
   return buf.readUInt32LE(40) / 32000;
 }
 
-export function hasCommand(cmd: string): boolean {
+/** Resolve the ffmpeg binary: honours CLIPY_FFMPEG, falls back to "ffmpeg". */
+export function ffmpegBin(): string {
+  return process.env.CLIPY_FFMPEG ?? "ffmpeg";
+}
+
+/**
+ * Returns true when the given command exists on PATH (or at the absolute path
+ * given).  For ffmpeg, use `-version` (not `--version`): ffmpeg exits with
+ * code 8 on `--version` even when it is installed, which would make the check
+ * always return false.
+ */
+export function hasCommand(cmd: string, versionFlag = "--version"): boolean {
   try {
-    execFileSync(cmd, ["--version"], { stdio: "ignore" });
+    execFileSync(cmd, [versionFlag], { stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+/** True when ffmpeg is available (via CLIPY_FFMPEG or PATH). */
+export function hasFfmpeg(): boolean {
+  return hasCommand(ffmpegBin(), "-version");
 }

@@ -78,7 +78,11 @@ pnpm test
 The capture package's real-recording tests run only on Linux with Xvfb and an
 ffmpeg that has x11grab and libx264 (`sudo apt-get install ffmpeg xvfb xauth
 libxtst6`); elsewhere they are skipped and the rest of the suite still runs.
-The other packages run anywhere.
+The `@clipy/transcribe` package also uses ffmpeg to build audio fixtures; its
+tests that require ffmpeg are skipped when ffmpeg is not on PATH. Install
+ffmpeg to run those tests too (`brew install ffmpeg` on macOS,
+`sudo apt-get install ffmpeg` on Linux, or set `CLIPY_FFMPEG` to the path of
+your ffmpeg binary). The other packages run anywhere.
 
 `packages/moments/src/generated/` is generated from the code the hosted
 Clipy uses, so both pick moments the same way. Propose changes to it in a
